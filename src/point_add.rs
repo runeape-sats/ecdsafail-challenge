@@ -1175,11 +1175,36 @@ fn kaliski_iteration(
     // ─── STEP 4 ───
     //   add ^= (f=1 AND b=0)
     //   with control(add): v_w -= u; s += r
+    //
+    // Fused dual controlled sub+add: reuse one tmp register across both ops.
+    // Load tmp[0..n] = add_f AND u, do sub on v_w, then transform tmp to
+    // add_f AND r in place (without unloading + reloading) by temporarily
+    // XOR'ing r into u and re-applying ccx(add_f, u, tmp). Then load
+    // tmp[n] = add_f AND r[n], do add on s, unload. Saves n CCX/iter.
     mcx2_polar(b, f, true, b_f, false, add_f);
-    // v_w -= u mod 2^n, controlled by add_f.
-    cucc_sub_ctrl(b, u, v_w, add_f);
-    // s += r mod 2^(n+1), controlled by add_f.
-    cucc_add_ctrl(b, r, s, add_f);
+    {
+        let tmp = b.alloc_qubits(n1);
+        // Load tmp[0..n] = add_f AND u
+        for i in 0..n { b.ccx(add_f, u[i], tmp[i]); }
+        // v_w -= tmp[0..n]
+        sub_nbit_qq(b, &tmp[..n], v_w);
+        // Transform tmp[0..n] from "add_f AND u" to "add_f AND r".
+        // Step A: u ^= r (in place, free CX).
+        for i in 0..n { b.cx(r[i], u[i]); }
+        // Step B: tmp[i] ^= add_f AND (u XOR r) = (add_f AND u_orig) XOR (add_f AND r).
+        //         Combined with pre-existing tmp[i] = add_f AND u_orig, gives
+        //         tmp[i] = add_f AND r[i].
+        for i in 0..n { b.ccx(add_f, u[i], tmp[i]); }
+        // Step C: restore u via another cx(r, u).
+        for i in 0..n { b.cx(r[i], u[i]); }
+        // Load tmp[n] = add_f AND r[n] (was 0).
+        b.ccx(add_f, r[n], tmp[n]);
+        // s += tmp[0..n+1]
+        add_nbit_qq(b, &tmp, s);
+        // Unload tmp = add_f AND r
+        for i in 0..n1 { b.ccx(add_f, r[i], tmp[i]); }
+        b.assert_zero_and_free_vec(&tmp);
+    }
 
     // ─── STEP 5: uncompute add; uncompute b ───
     mcx2_polar(b, f, true, b_f, false, add_f);
