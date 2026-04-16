@@ -1894,54 +1894,6 @@ fn mulmod(a: U256, b: U256, p: U256) -> U256 {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  TODO (NEXT SESSION): REPLACE KALISKI WITH BERNSTEIN-YANG SAFEGCD
-// ═══════════════════════════════════════════════════════════════════════════
-//
-// Kaliski below costs ~6M Toffoli (75% of current 7.86M total). Replacing it
-// with safegcd jumpdivsteps could cut to 2-3M, hitting near-SOTA (2.7M).
-//
-// IMPLEMENTATION PLAN:
-//
-// 1. **Basic divstep** (no batching, ~700k savings):
-//    - State: (delta_int [signed, 16 bits], f [n-bit], g [n-bit], u, v, q, r [accumulators]).
-//    - Init: delta=1, f=p, g=v_in, u=1, v=0, q=0, r=1.
-//    - Per iteration (744 iters for 256-bit):
-//      a. swap_flag = (delta > 0) AND g[0]. Cost: small.
-//      b. cswap (f,g), (u,v), (q,r) controlled by swap_flag. Cost: 4n CCX.
-//      c. delta_new = swap_flag ? -delta + 1 : delta + 1.
-//      d. g_low = g[0] (post-swap).
-//      e. Conditional g += g_low * f. Cost: ~n CCX.
-//      f. Conditional q += g_low * u, r += g_low * v. Cost: 2n CCX.
-//      g. Halve g, q, r (mod 2^N for accumulators, mod p for g — or use mod 2^N
-//         throughout and apply correction at end).
-//    - Per iter: ~7n = 1792 CCX. Total: 744 × 1792 = 1.3M per direction.
-//    - Bennett (forward + reverse): 2.6M per inversion. 2 inversions: 5.2M.
-//    - vs current Kaliski 6M. Save 800k.
-//
-// 2. **Jumpdivsteps batching** (additional 1-2M savings):
-//    - Read low N=62 bits of f, g (CX-copy to small registers).
-//    - Run N internal divsteps on small regs, computing 2x2 transition matrix M
-//      with N+1-bit signed entries.
-//    - Apply M to full f, g: f_new = (M00*f + M01*g) / 2^N, g_new similarly.
-//      = 4 muls of (62-bit × 256-bit) + halvings.
-//    - Number of batches: ~12 for 256-bit GCD.
-//    - Per batch: ~100k CCX. Total: 1.2M per direction. Bennett: 2.4M per inv.
-//    - 2 inversions: 4.8M. SAVE 1.2M vs basic divsteps, 2.4M vs Kaliski.
-//
-// 3. **Final correction**:
-//    - After divsteps, gcd(f, g) = ±1 (in f). Bezout in r (or q).
-//    - r contains v_in^{-1} * (-2^N) mod p (sign and scaling depend on convention).
-//    - Multiply r by classical constant K = -2^{-N} mod p to get clean inverse.
-//
-// 4. **Replace `with_kal_inv_raw` calls in build()** with new `with_safegcd_inv`.
-//    Output convention: same as current (negative scaled inverse).
-//
-// REFERENCES:
-//   - Bernstein-Yang 2019, "Fast constant-time gcd computation and modular
-//     inversion": https://eprint.iacr.org/2019/266
-//   - libsecp256k1's `secp256k1_modinv32_var` for jumpdivsteps reference.
-//
-// ═══════════════════════════════════════════════════════════════════════════
 //  Kaliski binary almost-inverse (qrisp-style, standard form)
 // ═══════════════════════════════════════════════════════════════════════════
 //
