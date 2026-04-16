@@ -2503,19 +2503,12 @@ pub fn build() -> Vec<Op> {
     // scale onto lam itself, then halve lam down once. This avoids the
     // inverse-register restore pass entirely.
     with_kal_inv_raw(b, &tx, p, |b, inv_raw| {
-        // LSB-first Horner: end lam = ty·inv_raw/2^(N-1) = -λ·2^N (vs MSB-first
-        // end lam = ty·inv_raw = -λ·2^(2N-1)). We then need only N halves
-        // afterward (vs 2N-1), saving N-1 = 255 halve ops on lam.
-        for i in 0..N {
-            cmod_add_qq(b, &lam, &ty, inv_raw[i], p);
-            if i < N - 1 { mod_halve_inplace_fast(b, &lam, p); }
-        }
-        for _ in 0..N { mod_halve_inplace_fast(b, &lam, p); }
-        // lam = -λ. Unadd ty using lam directly (no neg).
-        for i in 0..N {
-            cmod_add_qq(b, &ty, &lam, tx[i], p);
-            if i < N - 1 { mod_halve_inplace_fast(b, &ty, p); }
-        }
+        // First mul via schoolbook: lam = ty*inv_raw mod p = -λ·2^(2N-1).
+        mod_mul_add_into_acc_schoolbook(b, &lam, &ty, inv_raw, p);
+        // Halve 2N-1 times: lam = -λ.
+        for _ in 0..(2 * N - 1) { mod_halve_inplace_fast(b, &lam, p); }
+        // Second mul via schoolbook: ty += lam*tx = dy + (-λ)*dx = 0.
+        mod_mul_add_into_acc_schoolbook(b, &ty, &lam, &tx, p);
     });
 
     // Px := λ² - Px_orig - Qx. Rearranged: tx = dx - λ². Add 2Qx, then
