@@ -2272,11 +2272,13 @@ pub fn build() -> Vec<Op> {
         mod_mul_sub_qq(b, &ty, &lam, &tx, p);        // Py -= λ·dx = 0
     });
 
-    // Px := λ² - Px_orig - Qx
+    // Px := λ² - Px_orig - Qx. Rearranged: tx = dx - λ². Add 2Qx, then
+    // negate: -(dx - λ² + 2Qx) = λ² - dx - 2Qx = Rx. mod_add_qb is
+    // cheaper than mod_sub_qb (1024 vs 1280 per call, saves 512 total).
     mod_mul_sub_qq(b, &tx, &lam, &lam, p);
+    mod_add_qb(b, &tx, &ox, p);
+    mod_add_qb(b, &tx, &ox, p);
     mod_neg_inplace_fast(b, &tx, p);
-    mod_sub_qb(b, &tx, &ox, p);
-    mod_sub_qb(b, &tx, &ox, p);
 
     // Py := λ·(Qx − Rx) − Qy. Fuse the two muls into one by precomputing
     // (Qx − Rx) into a temporary; saves a full mod_mul_*.
