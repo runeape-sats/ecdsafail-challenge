@@ -247,3 +247,6 @@ timestamp	commit	toffoli	clifford	qubits	ops	correct	notes
 1776802526	59e3f89	4327484.000	23907253.865	3482	34072590	OK	autoresearch-checks
 1776802557	9c4bfce	4319110.000	23862447.803	3481	34011446	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
 1776802568	9c4bfce	4319110.000	23862439.345	3481	34011446	OK	autoresearch-checks
+1776802678	8cca4dd	4251623.906	23489582.601	3481	34011446	FAIL	debug | PHASE GARBAGE: global_phase = 0x0000000000002000 across 64 live shots (must be 0)
+1776802909	8cca4dd	4319110.000	23867176.206	3478	34016216	OK	schoolbook addsub correction3: cuccaro_sub_fast -> cuccaro_sub (saves 2n peak carries) 
+1776802920	8cca4dd	4319110.000	23867203.883	3478	34016216	OK	autoresearch-checks

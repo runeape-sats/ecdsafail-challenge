@@ -2914,12 +2914,14 @@ fn kaliski_iteration(
     s: &[QubitId],
     m_i: QubitId,
     f: QubitId,
-    a_f: QubitId,
-    b_f: QubitId,
-    add_f: QubitId,
     iter_idx: usize,
 ) {
     let n = u.len();
+    // Iter-local flags (zero at iter start and iter end): alloc fresh here
+    // so they don't live during body (which sees lower peak by -3 qubits).
+    let a_f = b.alloc_qubit();
+    let b_f = b.alloc_qubit();
+    let add_f = b.alloc_qubit();
 
     // ─── STEP 0: is_zero = (v_w == 0);  m[i] ^= (f AND is_zero);  f ^= m[i] ───
     // Truncated OR chain for late iter: v_w's bits [2n-iter..n-1] are 0
@@ -3097,6 +3099,11 @@ fn kaliski_iteration(
     b.x(s[0]);
     b.cx(s[0], a_f);
     b.x(s[0]);
+
+    // Free iter-local flags (all at 0 now).
+    b.free(add_f);
+    b.free(b_f);
+    b.free(a_f);
 }
 
 /// In-place classical-constant multiplication: v := v * c mod p.
@@ -3176,11 +3183,11 @@ struct KaliskiState {
     v_w: Vec<QubitId>,     // n qubits
     r: Vec<QubitId>,       // n qubits
     s: Vec<QubitId>,       // n qubits
-    m_hist: Vec<QubitId>,  // 2n qubits
+    m_hist: Vec<QubitId>,  // iters qubits
     f_flag: QubitId,
-    a_flag: QubitId,
-    b_flag: QubitId,
-    add_flag: QubitId,
+    // a_flag, b_flag, add_flag are iter-local: allocated fresh inside each
+    // kaliski_iteration / _backward and zeroed/freed at iter end. This
+    // saves 3 qubits of state live during body, dropping peak by 3.
 }
 
 fn alloc_kaliski_state(b: &mut B, n: usize, max_iters: usize) -> KaliskiState {
@@ -3191,16 +3198,10 @@ fn alloc_kaliski_state(b: &mut B, n: usize, max_iters: usize) -> KaliskiState {
         s: b.alloc_qubits(n),
         m_hist: b.alloc_qubits(max_iters),
         f_flag: b.alloc_qubit(),
-        a_flag: b.alloc_qubit(),
-        b_flag: b.alloc_qubit(),
-        add_flag: b.alloc_qubit(),
     }
 }
 
 fn free_kaliski_state(b: &mut B, st: KaliskiState) {
-    b.free(st.add_flag);
-    b.free(st.b_flag);
-    b.free(st.a_flag);
     b.free(st.f_flag);
     b.free_vec(&st.m_hist);
     b.free_vec(&st.s);
@@ -3237,7 +3238,7 @@ fn kaliski_forward(b: &mut B, v_in: &[QubitId], st: &KaliskiState, p: U256, iter
         kaliski_iteration(
             b, p, &st.u, &st.v_w, &st.r, &st.s,
             st.m_hist[i],
-            st.f_flag, st.a_flag, st.b_flag, st.add_flag,
+            st.f_flag,
             i,
         );
     }
@@ -3322,12 +3323,14 @@ fn kaliski_iteration_backward(
     s: &[QubitId],
     m_i: QubitId,
     f: QubitId,
-    a_f: QubitId,
-    b_f: QubitId,
-    add_f: QubitId,
     iter_idx: usize,
 ) {
     let n = u.len();
+    // Iter-local flags alloc'd fresh (zero at iter start in the backward
+    // direction). They are zeroed and freed at iter end to match forward.
+    let a_f = b.alloc_qubit();
+    let b_f = b.alloc_qubit();
+    let add_f = b.alloc_qubit();
 
     // ── Reverse STEP 10 ─────────────────────────────────────────────────
     b.x(s[0]);
@@ -3493,6 +3496,11 @@ fn kaliski_iteration_backward(
             b.free_vec(&or_chain);
         }
     }
+
+    // Free iter-local flags (all at 0 now after backward steps).
+    b.free(add_f);
+    b.free(b_f);
+    b.free(a_f);
 }
 
 /// Explicit backward pass for kaliski_forward. Uses measurement-based
@@ -3506,7 +3514,7 @@ fn kaliski_backward(b: &mut B, v_in: &[QubitId], st: &KaliskiState, p: U256, ite
         kaliski_iteration_backward(
             b, p, &st.u, &st.v_w, &st.r, &st.s,
             st.m_hist[i],
-            st.f_flag, st.a_flag, st.b_flag, st.add_flag,
+            st.f_flag,
             i,
         );
     }
