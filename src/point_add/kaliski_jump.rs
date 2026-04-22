@@ -219,6 +219,14 @@ pub struct HybridStats {
     pub singleton_rs_classes: usize,
     pub most_common_rs_class_count: usize,
     pub most_common_rs_class: Option<(u16, u16)>,
+
+    // Joint compression: how many distinct (uv_mat, rs_mat) pairs actually occur.
+    pub distinct_joint_pairs: usize,
+    pub mean_joint_pairs_per_class: f64,
+    pub max_joint_pairs_per_class: usize,
+    pub singleton_joint_classes: usize,
+    pub most_common_joint_class_count: usize,
+    pub most_common_joint_class: Option<(u16, u16)>,
 }
 
 /// Sample actual secp256k1 Kaliski trajectories and measure the compressibility
@@ -232,8 +240,10 @@ pub fn hybrid_kaliski_window_survey(
     let mut sampler = Sampler::new(seed, SECP256K1_P);
     let mut global_uv_mats: BTreeSet<Mat2> = BTreeSet::new();
     let mut global_rs_mats: BTreeSet<Mat2> = BTreeSet::new();
+    let mut global_joint_pairs: BTreeSet<(Mat2, Mat2)> = BTreeSet::new();
     let mut by_class_uv: BTreeMap<(u16, u16), BTreeSet<Mat2>> = BTreeMap::new();
     let mut by_class_rs: BTreeMap<(u16, u16), BTreeSet<Mat2>> = BTreeMap::new();
+    let mut by_class_joint: BTreeMap<(u16, u16), BTreeSet<(Mat2, Mat2)>> = BTreeMap::new();
     let mut windows = 0usize;
     let mut max_uv_entry_abs = 0i128;
     let mut sum_log2_uv_entry_abs = 0.0f64;
@@ -250,8 +260,10 @@ pub fn hybrid_kaliski_window_survey(
             let (nu, nv, obs) = observe_window(u, v, w, t);
             global_uv_mats.insert(obs.uv_mat);
             global_rs_mats.insert(obs.rs_mat);
+            global_joint_pairs.insert((obs.uv_mat, obs.rs_mat));
             by_class_uv.entry((obs.low_u, obs.low_v)).or_default().insert(obs.uv_mat);
             by_class_rs.entry((obs.low_u, obs.low_v)).or_default().insert(obs.rs_mat);
+            by_class_joint.entry((obs.low_u, obs.low_v)).or_default().insert((obs.uv_mat, obs.rs_mat));
             let uv_abs = obs.uv_mat.max_abs();
             if uv_abs > max_uv_entry_abs { max_uv_entry_abs = uv_abs; }
             if uv_abs > 0 {
@@ -305,6 +317,22 @@ pub fn hybrid_kaliski_window_survey(
         }
     }
 
+    let mut total_joint_pairs_per_class = 0usize;
+    let mut max_joint_pairs_per_class = 0usize;
+    let mut singleton_joint_classes = 0usize;
+    let mut most_common_joint_class_count = 0usize;
+    let mut most_common_joint_class = None;
+    for (cls, mats) in &by_class_joint {
+        let c = mats.len();
+        total_joint_pairs_per_class += c;
+        if c > max_joint_pairs_per_class { max_joint_pairs_per_class = c; }
+        if c == 1 { singleton_joint_classes += 1; }
+        if c > most_common_joint_class_count {
+            most_common_joint_class_count = c;
+            most_common_joint_class = Some(*cls);
+        }
+    }
+
     HybridStats {
         inputs: n_inputs,
         windows,
@@ -325,6 +353,12 @@ pub fn hybrid_kaliski_window_survey(
         singleton_rs_classes,
         most_common_rs_class_count,
         most_common_rs_class,
+        distinct_joint_pairs: global_joint_pairs.len(),
+        mean_joint_pairs_per_class: if low_classes_seen == 0 { 0.0 } else { total_joint_pairs_per_class as f64 / low_classes_seen as f64 },
+        max_joint_pairs_per_class,
+        singleton_joint_classes,
+        most_common_joint_class_count,
+        most_common_joint_class,
     }
 }
 
@@ -370,10 +404,19 @@ mod tests {
             if let Some((ucls, vcls)) = s.most_common_rs_class {
                 eprintln!("most common rs class    : (u_low={}, v_low={})", ucls, vcls);
             }
+            eprintln!("distinct joint pairs    : {}", s.distinct_joint_pairs);
+            eprintln!("mean joint/class        : {:.3}", s.mean_joint_pairs_per_class);
+            eprintln!("max joint/class         : {}", s.max_joint_pairs_per_class);
+            eprintln!("singleton joint classes : {}", s.singleton_joint_classes);
+            eprintln!("most common joint ct    : {}", s.most_common_joint_class_count);
+            if let Some((ucls, vcls)) = s.most_common_joint_class {
+                eprintln!("most common joint class : (u_low={}, v_low={})", ucls, vcls);
+            }
             eprintln!("===============================================");
             assert!(s.windows > 0);
             assert!(s.distinct_global_uv_mats >= 1);
             assert!(s.distinct_global_rs_mats >= 1);
+            assert!(s.distinct_joint_pairs >= 1);
         }
     }
 }

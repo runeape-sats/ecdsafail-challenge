@@ -205,26 +205,30 @@ I added `src/point_add/kaliski_jump.rs` and sampled actual Kaliski trajectories
 for 10,000 random secp256k1 inputs. Windows overlap (advance one step, observe
 `t`-step lookahead), because that's the runtime use-case.
 
+The survey now tracks **three** transition alphabets per `(w, t)`:
+1. state-side `(u, v_w)` matrices,
+2. coefficient-side `(r, s)` matrices,
+3. the **joint pair** `(uv_mat, rs_mat)` — i.e. the actual object a reversible
+   batched primitive would need to look up.
+
 Results:
 
-| w | t | distinct global mats | max `|entry|` | mean log2 `|entry|` | classes seen | mean mats / class | max mats / class |
+| w | t | distinct `uv` mats | distinct `rs` mats | distinct joint pairs | max `|entry|` | mean mats/class | max mats/class |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| 6 | 4 | 125 | 16 | 3.287 | 3,072 | 4.506 | 16 |
-| 8 | 4 | 125 | 16 | 3.287 | 49,152 | 4.493 | 16 |
-| 8 | 6 | 1,133 | 64 | 4.705 | 49,152 | 9.461 | 62 |
+| 6 | 4 | 125 | 125 | 125 | 16 | 4.506 | 16 |
+| 8 | 4 | 125 | 125 | 125 | 16 | 4.493 | 16 |
+| 8 | 6 | 1,133 | 1,133 | 1,133 | 64 | 9.461 | 62 |
 
 Interpretation:
-- For **t = 4**, the entire global matrix family is only **125** matrices,
-  regardless of whether we key on 6 or 8 low bits.
-- Entry growth is tiny: max `|entry| = 16`.
-- Each low-bit class sees only about 4.5 matrices on average.
-- For **t = 6**, the matrix family is still modest (1,133 matrices), and
-  coefficients only grow to 64.
-- Crucially, the coefficient-side `(r, s)` matrices compress the same way,
-  so the hybrid doesn't immediately die on the cleanup side.
+- For **t = 4**, the **entire joint transition family** is only **125** matrices.
+- For **t = 6**, the joint family is still only **1,133** matrices.
+- The coefficient-side `(r, s)` compression is not merely similar — it is
+  effectively identical to `(u, v_w)` on the sampled trajectories.
+- Most importantly, the **joint pair count equals the per-side count** in the
+  sampled data. That means the state-side and coefficient-side transforms appear
+  to be locked together, so a single compressed lookup may suffice.
 
-This is a *much* stronger compression phenomenon than in full jumped-BY and is
-currently the strongest empirical structural lead in the project.
+This is now the strongest empirical structural lead in the project.
 
 ## Proposed next sessions
 
