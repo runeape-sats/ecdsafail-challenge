@@ -298,3 +298,57 @@ level tuning we don't have access to.
 - `src/point_add/by.rs` with classical B-Y divsteps2 harness + 3 unit tests
   (all passing). Activated via `BY_TEST=1`.
 
+
+## Session 2026-04-22 (continued): windowed/sparse const-mul attempt
+
+### What I built
+`src/point_add/const_mul.rs` — sparse classical-constant modular multiply
+using a 2n-bit tmp_ext accumulator and Solinas folding. Verified it
+produces correct OUTPUT (CLASSICAL check passed at 4,423,142 Toffoli).
+
+### Why it didn't help
+**Correctness: ✓** (OK run with +29k Toffoli, +512 qubits vs baseline).
+
+**Performance: NET NEGATIVE.** For pair1_halve (K = 2^{-399} mod p, dense
+with 122 set bits), the sparse mul cost ≈ 100k CCX — same as 399 iterated
+`mod_halve_inplace_fast` calls. For pair2_double (K = 2^{+399} mod p,
+sparse with 7 set bits), the forward is cheap (~5k CCX) but the cleanup
+pass uses K^{-1} = 2^{-399} (dense, ~100k CCX). The dense-direction
+cleanup dominates.
+
+Also, the 2n-bit tmp_ext blows peak qubits from 2729 to 3241 (over cap).
+
+**Phase garbage on partial integration**: replacing ONLY pair2_double
+(and leaving pair1_halve as iterated) produces phase garbage. The HMR
+calls in the forward sparse-mul don't pair with anything in the baseline
+halving loop; their phase contributions don't cancel.
+
+**Conclusion**: sparse_const_mul as a drop-in replacement for halve/double
+loops is not viable without either windowed dense-direction optimization
+(which would need a QROM primitive, 200-500 LOC) or a different
+algebraic restructuring that avoids needing the dense K^{-1} at all.
+
+The primitive is not committed.
+
+### Remaining pieces (kept as dead code)
+- `src/point_add/by.rs` with classical B-Y divsteps2 harness + tests.
+  Analytically shown to be net-worse than Kaliski at every jump width.
+
+### Honest summary of single-session ceiling
+After a full session of structural moonshots:
+- Montgomery batched inversion: cleanup obstruction (proven here + prior).
+- B-Y divsteps (any w ≥ 1): per-iter cost × safegcd iter count ≥ Kaliski.
+- Jacobian coords: cleanup obstruction equivalent to Montgomery batched.
+- HRSL cumulative swap state: net +3.2M per prior + my re-analysis.
+- Windowed/sparse classical-const mul: phase issues, ~0 net savings.
+- Iter count reduction: 399/399 is minimum for current op stream.
+- STEP 4 / STEP 3+9 cswap restructuring: all symmetric variants tried
+  cost the same or more.
+
+The 4.39M / 2729q floor reached this session appears to be near the
+**single-session ceiling with public-literature techniques**. Closing to
+Google's 2.1–2.7M SOTA requires either undisclosed Google techniques or
+multi-session novel quantum-algorithm research (most promising target:
+w=2 reversible B-Y with novel matrix-application primitives, or a
+fundamentally different single-Kaliski point-add structure).
+
