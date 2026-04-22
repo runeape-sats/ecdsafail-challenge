@@ -60,6 +60,8 @@ use alloy_primitives::U256;
 
 use crate::circuit::{BitId, Op, OperationType, QubitId, RegisterId};
 
+pub mod by;
+
 struct B {
     pub ops: Vec<Op>,
     pub next_qubit: u32,
@@ -2972,155 +2974,6 @@ fn cmp_gt_const_n1(b: &mut B, r: &[QubitId], c: U256, flag: QubitId) {
     add_nbit_const(b, r, c_plus_1);
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-//  Bernstein-Yang divsteps2 : classical test harness
-// ─────────────────────────────────────────────────────────────────────────
-//
-// Ref: Bernstein & Yang 2019, "Fast constant-time gcd computation and
-// modular inversion" (TCHES 2019(3)).  https://gcd.cr.yp.to/safegcd-20190413.pdf
-//
-// divstep(delta, f, g):
-//   if delta > 0 and g is odd:  (1 - delta, g, (g - f) / 2)
-//   elif         g is odd:      (1 + delta, f, (g + f) / 2)
-//   else:                       (1 + delta, f, g / 2)
-//
-// Invariants: f always odd; |f|,|g| <= max(|f0|,|g0|) throughout;
-// after N >= safegcd(n) iters with gcd(f0,g0)=1, f_N = +/-1 and g_N = 0.
-//
-// Coefficient tracking (integers):
-//     f_k         = u * f0 + v * g0
-//     2^k * g_k   = q * f0 + r * g0
-// Only g carries the /2; f never halves, so (u, v) don't either.
-// Taking mod p at termination with (f0, g0) = (p, value), f_N = +/-1:
-//     +/-1 == v * value  (mod p)   =>   value^-1 == +/- v  (mod p)
-//
-// Safegcd bound: N_n = ceil((49n + 80) / 17). For n=256, N_256 = 743.
-//
-// Classical harness tracks (f, g) as i128 (caller bounds inputs so they
-// fit signed-127) and (u, v, q, r) as u128 reduced mod p. Parity reads
-// the low bit of g as a signed integer (i128 `& 1` is correct for both
-// signs in two's-complement).
-
-#[allow(dead_code)]
-fn by_safegcd_iters(n_bits: usize) -> usize {
-    // ceil((49n + 80) / 17)
-    (49 * n_bits + 80 + 16) / 17
-}
-
-/// Classical one-step-at-a-time (w=1) divsteps2.
-/// Returns (delta_final, f_final, g_final, u, v, q, r) with coeffs in [0, p).
-#[allow(dead_code)]
-fn classical_divsteps2_i128(
-    n_iters: usize,
-    delta_init: i64,
-    f_init: i128,
-    g_init: i128,
-    p: u128,
-) -> (i64, i128, i128, u128, u128, u128, u128) {
-    assert!(f_init & 1 == 1, "f must be odd");
-    assert!(p > 2 && p & 1 == 1, "p must be an odd modulus");
-    assert!(p < (1u128 << 127), "p must fit so a+b doesn't wrap in u128");
-    let addm = |a: u128, b: u128| -> u128 {
-        let s = a + b;
-        if s >= p { s - p } else { s }
-    };
-    let negm = |a: u128| -> u128 { if a == 0 { 0 } else { p - a } };
-
-    let mut delta = delta_init;
-    let mut f = f_init;
-    let mut g = g_init;
-    let mut u: u128 = 1;
-    let mut v: u128 = 0;
-    let mut q: u128 = 0;
-    let mut r: u128 = 1;
-    for _ in 0..n_iters {
-        if delta > 0 && (g & 1) != 0 {
-            delta = -delta;
-            let tmp_f = f; f = g; g = -tmp_f;
-            let (tu, tv) = (u, v);
-            u = q; v = r;
-            q = negm(tu);
-            r = negm(tv);
-        }
-        delta += 1;
-        if (g & 1) != 0 {
-            g += f;
-            q = addm(q, u);
-            r = addm(r, v);
-        }
-        g >>= 1;
-    }
-    (delta, f, g, u, v, q, r)
-}
-
-/// Modular inverse via classical B-Y. Returns None if gcd(value, p) != 1.
-#[allow(dead_code)]
-fn classical_by_modinv_i128(value: u128, p: u128) -> Option<u128> {
-    if value == 0 { return None; }
-    let bits = 128 - p.leading_zeros() as usize;
-    let n_iters = by_safegcd_iters(bits);
-    let (_, f_final, g_final, _u, v, _q, _r) =
-        classical_divsteps2_i128(n_iters, 1, p as i128, value as i128, p);
-    if g_final != 0 { return None; }
-    match f_final {
-        1  => Some(v),
-        -1 => Some(if v == 0 { 0 } else { p - v }),
-        _  => None,
-    }
-}
-
-/// Small-modulus pow-mod (requires p < 2^63 to keep u128 multiplication safe).
-#[allow(dead_code)]
-fn classical_pow_mod_u128(mut base: u128, mut exp: u128, p: u128) -> u128 {
-    assert!(p < (1u128 << 63));
-    base %= p;
-    let mut r: u128 = 1 % p;
-    while exp > 0 {
-        if exp & 1 == 1 { r = (r * base) % p; }
-        exp >>= 1;
-        if exp > 0 { base = (base * base) % p; }
-    }
-    r
-}
-
-#[allow(dead_code)]
-fn classical_gcd_u128(a: u128, b: u128) -> u128 {
-    if b == 0 { a } else { classical_gcd_u128(b, a % b) }
-}
-
-/// Env-gated: verify classical B-Y divsteps2 against Fermat modinv across
-/// a range of small primes. Run with `BY_TEST=1`.
-#[allow(dead_code)]
-fn run_by_classical_test() {
-    let primes: &[u128] = &[
-        3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67,
-        71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 131, 137, 139,
-        149, 151, 251, 257, 509, 1009, 65537, 1_000_003, 2_147_483_647,
-        (1u128 << 61) - 1, // Mersenne M61
-    ];
-    let mut total: u64 = 0;
-    let mut pass: u64 = 0;
-    let mut first_fail: Option<(u128, u128, Option<u128>, u128)> = None;
-    for &p in primes {
-        let bound = p.min(400);
-        for val in 1..bound {
-            if classical_gcd_u128(val, p) != 1 { continue; }
-            total += 1;
-            let expected = classical_pow_mod_u128(val, p - 2, p);
-            let got = classical_by_modinv_i128(val, p);
-            if got == Some(expected) {
-                pass += 1;
-            } else if first_fail.is_none() {
-                first_fail = Some((p, val, got, expected));
-            }
-        }
-    }
-    eprintln!("BY classical w=1: {}/{} pass", pass, total);
-    if let Some((p, val, got, expected)) = first_fail {
-        eprintln!("  first fail: p={} val={} got={:?} expected={}", p, val, got, expected);
-    }
-}
-
 /// Classical modular inverse via Fermat's little theorem. Used ONLY at
 /// circuit-construction time to compute correction constants.
 #[allow(dead_code)]
@@ -4021,7 +3874,7 @@ pub fn build() -> Vec<Op> {
     b.free_vec(&lam);
 
     if std::env::var("BY_TEST").is_ok() {
-        run_by_classical_test();
+        by::run_classical_test();
     }
 
     if std::env::var("TRACE_PEAK").is_ok() {
