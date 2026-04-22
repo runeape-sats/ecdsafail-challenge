@@ -556,18 +556,49 @@ So this real specialized primitive is an actual win:
 This is the first genuinely cheaper **real builder-level** bulk primitive in the
 project.
 
-### Attempted direct main-path integration: not yet correct
-I also tried swapping the specialized bulk primitive into the live Kaliski
-forward path for the first 3 iterations. That attempt **failed full point-add
-correctness**, so it was backed out immediately.
+### Direct main-path integration: now working with a matching specialized backward
+I added `src/point_add/kaliski_equiv.rs` to diagnose the real blocker. This is
+not a generic profiler; it checks whether the specialized bulk primitive is
+**state-equivalent** to the generic Kaliski step on reachable secp256k1 states.
 
-Current diagnosis:
-- the forward primitive is promising,
-- but its compatibility with the stored `m_hist` history / generic backward path
-  is not yet nailed down.
+The new equivalence tests now show:
+- specialized step 0/1/2 matches the generic step on reachable states,
+- specialized 3-step forward sequence matches the generic 3-step forward state,
+- and specialized 3-step forward+backward matches the generic 3-step
+  forward+backward composition.
 
-So this remains a real integrated **prototype**, not yet an enabled circuit
-replacement.
+That let me integrate something real:
+- `kaliski_forward` now has an experimental path gated by
+  `KAL_BULK3_EXPERIMENT=1` that uses the specialized bulk primitive for the
+  first 3 iterations,
+- `kaliski_backward` uses a matching specialized backward for those same 3
+  iterations,
+- and the full point-add circuit now passes correctness again with the
+  experimental path enabled.
+
+### Actual integrated circuit result
+With `KAL_BULK3_EXPERIMENT=1` enabled on the full point-add circuit:
+
+| metric | baseline | integrated specialized bulk-3 |
+|---|---:|---:|
+| avg executed Toffoli | 4,394,546 | **4,391,444** |
+| emitted ops | 35,186,356 | **35,143,300** |
+| qubits | 2,729 | 2,729 |
+
+So the live integration gives a real end-to-end saving of:
+- **3,102 Toffoli** per point-add,
+- with qubits unchanged.
+
+This is much smaller than the raw 3-step micro-benchmark win, but it is real,
+correct, and now inside the live circuit.
+
+### Interpretation
+- The specialized early-bulk primitive is now the first **actually integrated**
+  moonshot-derived improvement in the live point-add path.
+- The gain is currently modest because only the first 3 iterations are replaced.
+- But the infrastructure is now much better: we have a concrete method for
+  proving specialized-step equivalence against the live Kaliski state machine,
+  rather than only reasoning from classical trajectories.
 
 ## Revised state of the moonshot
 The good news:

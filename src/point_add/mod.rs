@@ -67,6 +67,7 @@ pub mod kaliski_key_search;
 pub mod kaliski_window_decomp;
 pub mod kaliski_hybrid_proto;
 pub mod kaliski_prefix_key;
+pub mod kaliski_equiv;
 pub mod test_timeout;
 
 struct B {
@@ -3494,13 +3495,22 @@ fn kaliski_forward(b: &mut B, v_in: &[QubitId], st: &KaliskiState, p: U256, iter
     b.x(st.f_flag);
 
     // ─── Iterations ───
+    let use_bulk_prefix3 = std::env::var("KAL_BULK3_EXPERIMENT").is_ok();
     for i in 0..iters {
-        kaliski_iteration(
-            b, p, &st.u, &st.v_w, &st.r, &st.s,
-            st.m_hist[i],
-            st.f_flag,
-            i,
-        );
+        if use_bulk_prefix3 && i < 3 {
+            kaliski_iteration_bulk_prefix3(
+                b, &st.u, &st.v_w, &st.r, &st.s,
+                st.m_hist[i],
+                i,
+            );
+        } else {
+            kaliski_iteration(
+                b, p, &st.u, &st.v_w, &st.r, &st.s,
+                st.m_hist[i],
+                st.f_flag,
+                i,
+            );
+        }
     }
 
     // After the loop for nonzero v_in, classical invariants give:
@@ -3569,6 +3579,112 @@ fn or_step_uncompute(b: &mut B, x: QubitId, y: QubitId, out: QubitId) {
     b.cz_if(x, y, m);    // phase correction with (NOT x_orig, NOT y_orig) controls
     b.x(y);
     b.x(x);
+}
+
+/// Reverse of the specialized `kaliski_iteration_bulk_prefix3` used for the
+/// first few guaranteed-bulk nonterminal iterations.
+fn kaliski_iteration_bulk_prefix3_backward(
+    b: &mut B,
+    u: &[QubitId],
+    v_w: &[QubitId],
+    r: &[QubitId],
+    s: &[QubitId],
+    m_i: QubitId,
+    iter_idx: usize,
+) {
+    let n = u.len();
+    let a_f = b.alloc_qubit();
+    let b_f = b.alloc_qubit();
+    let add_f = b.alloc_qubit();
+
+    let _kal_saved_phase = b.phase;
+
+    // Reverse STEP 10.
+    b.set_phase("bk_bulk_step10");
+    b.x(s[0]);
+    b.cx(s[0], a_f);
+    b.x(s[0]);
+
+    // Reverse STEP 9.
+    b.set_phase("bk_bulk_step9_cswap");
+    let rs_width_step9 = if iter_idx + 2 < n { iter_idx + 2 } else { n };
+    for j in (0..rs_width_step9).rev() { cswap(b, a_f, r[j], s[j]); }
+    for j in (0..n).rev() { cswap(b, a_f, u[j], v_w[j]); }
+
+    // Reverse STEP 8+7 and STEP 6.
+    b.set_phase("bk_bulk_step6_7_8");
+    mod_halve_no_corr(b, r);
+    for i in (0..(n - 1)).rev() { b.swap(v_w[i], v_w[i + 1]); }
+
+    // Reverse STEP 5.
+    b.set_phase("bk_bulk_step5");
+    b.cx(a_f, b_f);
+    b.cx(m_i, b_f);
+    b.x(add_f);
+    b.cx(b_f, add_f);
+
+    // Reverse STEP 4.
+    b.set_phase("bk_bulk_step4");
+    {
+        let tmp = b.alloc_qubits(n);
+        let load_width = if iter_idx + 1 < n { iter_idx + 1 } else { n };
+        for i in 0..load_width { b.ccx(add_f, r[i], tmp[i]); }
+        let sub_width = if iter_idx + 2 < n { iter_idx + 2 } else { n };
+        let tmp_sub_slice: Vec<QubitId> = tmp[0..sub_width].to_vec();
+        let s_slice: Vec<QubitId> = s[0..sub_width].to_vec();
+        sub_nbit_qq_fast(b, &tmp_sub_slice, &s_slice);
+        let transform_width = n;
+        for i in 0..transform_width { b.cx(r[i], u[i]); }
+        for i in 0..transform_width { b.ccx(add_f, u[i], tmp[i]); }
+        for i in 0..transform_width { b.cx(r[i], u[i]); }
+        let tmp_add_slice: Vec<QubitId> = tmp[0..n].to_vec();
+        let v_w_slice: Vec<QubitId> = v_w[0..n].to_vec();
+        add_nbit_qq_fast(b, &tmp_add_slice, &v_w_slice);
+        for i in 0..n {
+            let m = b.alloc_bit();
+            b.hmr(tmp[i], m);
+            b.cz_if(add_f, u[i], m);
+        }
+        b.free_vec(&tmp);
+    }
+    b.cx(b_f, add_f);
+    b.x(add_f);
+
+    // Reverse STEP 3.
+    b.set_phase("bk_bulk_step3_cswap");
+    let rs_width_step3 = if iter_idx + 1 < n { iter_idx + 1 } else { n };
+    for j in (0..rs_width_step3).rev() { cswap(b, a_f, r[j], s[j]); }
+    for j in (0..n).rev() { cswap(b, a_f, u[j], v_w[j]); }
+
+    // Reverse STEP 2.
+    b.set_phase("bk_bulk_step2");
+    let l_gt = b.alloc_qubit();
+    with_gt(b, u, v_w, l_gt, |b| {
+        b.x(b_f);
+        let t = b.alloc_qubit();
+        b.ccx(l_gt, b_f, t);
+        b.cx(t, m_i);
+        b.cx(t, a_f);
+        b.ccx(l_gt, b_f, t);
+        b.free(t);
+        b.x(b_f);
+    });
+    b.free(l_gt);
+
+    // Reverse STEP 1.
+    b.set_phase("bk_bulk_step1");
+    b.cx(m_i, b_f);
+    b.cx(a_f, b_f);
+    b.x(v_w[0]);
+    b.ccx(u[0], v_w[0], m_i);
+    b.x(v_w[0]);
+    b.cx(u[0], a_f);
+    b.x(a_f);
+
+    b.free(add_f);
+    b.free(b_f);
+    b.free(a_f);
+    b.set_phase(_kal_saved_phase);
 }
 
 /// Reverse of a single kaliski_iteration. Uses measurement-based
@@ -3781,14 +3897,23 @@ fn kaliski_backward(b: &mut B, v_in: &[QubitId], st: &KaliskiState, p: U256, ite
     let n = v_in.len();
     debug_assert!(iters <= st.m_hist.len());
 
+    let use_bulk_prefix3 = std::env::var("KAL_BULK3_EXPERIMENT").is_ok();
     // ─── Reverse iterations (in reverse order) ───
     for i in (0..iters).rev() {
-        kaliski_iteration_backward(
-            b, p, &st.u, &st.v_w, &st.r, &st.s,
-            st.m_hist[i],
-            st.f_flag,
-            i,
-        );
+        if use_bulk_prefix3 && i < 3 {
+            kaliski_iteration_bulk_prefix3_backward(
+                b, &st.u, &st.v_w, &st.r, &st.s,
+                st.m_hist[i],
+                i,
+            );
+        } else {
+            kaliski_iteration_backward(
+                b, p, &st.u, &st.v_w, &st.r, &st.s,
+                st.m_hist[i],
+                st.f_flag,
+                i,
+            );
+        }
     }
 
     // ─── Reverse Init ───
