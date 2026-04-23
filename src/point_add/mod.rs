@@ -3141,19 +3141,11 @@ fn kaliski_iteration_bulk_prefix3(
 
     let _kal_saved_phase = b.phase;
 
-    // Reproduce the generic step-0 HMR history exactly on the guaranteed
-    // nonterminal prefix. Classically this is a no-op because v_w != 0 and
-    // m_i starts at 0, but the measurement-based uncompute phase history still
-    // matters.
-    b.set_phase("kal_bulk_step0_eqzero");
-    let or_width = if iter_idx < u.len() { u.len() } else { 2 * u.len() - iter_idx };
-    let dummy_m = b.alloc_qubit();
-    with_eq_zero_fast(b, &v_w[0..or_width], add_f, |b| {
-        b.ccx(f1, add_f, dummy_m);
-    });
-    b.cx(dummy_m, f1);
-    b.free(dummy_m);
-
+    // STEP 0 is a no-op on the guaranteed-bulk prefix (v_w != 0 so the
+    // is_zero flag is always 0). The forward measurement-uncompute phases of
+    // the OR chain are self-cancelling within with_eq_zero_fast, so dropping
+    // the call entirely on both forward and backward is consistent.
+    let _ = iter_idx;
     b.set_phase("kal_bulk_step1");
     // Specialized STEP 1 for f=1, plus the generic z HMR history.
     b.x(a_f);
