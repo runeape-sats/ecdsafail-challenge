@@ -39,6 +39,23 @@ rewrite of `with_kal_inv_raw` and friends. Multi-week effort.
 
 ## 2. Kim 2026 — unconditional execution + postponed modular reduction
 
+**Update from this session:** I added `src/point_add/kim_proto.rs` and split the question in two:
+
+1. **Naive narrow-r port** (wrong model): FAILS. If we keep `r` truncated to 256 bits, then
+   - unconditional tail ≠ fixed doubling of the conditional result,
+   - final `r` after 512 rounds ≠ `±x^{-1}·2^{2n}`,
+   - so the naive claim is false under our current narrow-r classical model.
+
+2. **Kim-style wide-r port** (the right model): PASSES. If we keep `r,s` as 512-bit values and only reduce mod p at the end, then over 200 random secp256k1 inputs:
+   - conditional Kaliski termination step `k` ranges in **[339, 384]**, avg **363.06**,
+   - unconditional execution to 512 rounds equals the conditional result followed by a deterministic `2^(512-k)` doubling tail,
+   - and the low 256-bit residue of the final wide `r` is indeed `±x^{-1}·2^{2n}`.
+
+Interpretation:
+- Kim 2a **survives** as a real formulation path, but only with a widened `r,s` model and postponed reduction.
+- Therefore it is **not** a low-risk tweak to our present Kaliski scaffold.
+- Real import path is probably "Kim 2a + Kim 2b together" (unconditional execution plus postponed reduction), not 2a alone.
+
 Paper `/tmp/kim_2026.pdf`. Two linked tricks, Section 3.3.1:
 
 ### 2a. Unconditional execution
@@ -168,22 +185,24 @@ inversion — no saving.
 
 ## Prioritised moves for next session
 
-Ranked by impact × ease:
+Ranked by impact × ease, updated after the falsification work in
+`src/point_add/kim_proto.rs` and `src/point_add/luo_proto.rs`:
 
 | # | trick | impact (CCX save) | qubit ∆ | implementation risk |
 |---|-------|------------------:|--------:|----------------------|
-| 1 | Kim 2a (unconditional exec, skip halve/double) | **-207k** | ~0 | LOW (touches with_kal_inv_raw) |
-| 2 | HRSL swap-based full Kaliski | -400k to -600k | 0 | MEDIUM (phase-correctness) |
-| 3 | HRSL register reuse for pair1_mul2 | 0 (enables -28k from k1 mul) | -258 peak | MEDIUM (allocator threading) |
-| 4 | Kim 2b (postponed mod reduction) | -300k to -500k | +n (r becomes 2n) | HIGH (rewrite of r arithmetic) |
-| 5 | Luo register sharing | 0 or negative Toffoli | **-768 peak** | VERY HIGH (rewrite Kaliski as PZ long-division) |
+| 1 | HRSL swap-based full Kaliski | -400k to -600k | 0 | MEDIUM (phase-correctness) |
+| 2 | HRSL register reuse for pair1_mul2 / mul workspace | 0 direct, but enables -28k/site | -258 peak | MEDIUM (allocator threading) |
+| 3 | **Kim 2a+2b together** (unconditional exec + postponed reduction) | maybe -500k to -700k | +n in inversion core, -207k loops removed | HIGH |
+| 4 | Luo register sharing | 0 or negative Toffoli | **-632 to -768 peak** | VERY HIGH (rewrite Kaliski as PZ long-division) |
+| 5 | Gidney windowed classical-quantum add | ~-6k | 0 | LOW |
 
-Combined attainable with 1+2+3 (low+medium risk, no formulation
-rewrite): **~600-800k CCX saving (15-20%), ~250q peak saving**.
-Reaches ~3.4-3.6M Toffoli @ ~2460q.
+Revised combined hope with 1+2:
+- **~430k to 630k CCX saved**,
+- **~250q peak saved**,
+- likely best stable target around **3.55M to 3.75M Toffoli @ ~2460q**.
 
-With Kim 2b added: ~3.0-3.2M @ 2460q. Close to Google SOTA low-qubit
-estimate of 2.7M @ 1175q on Toffoli count (though not on qubit count).
-
-With Luo on top: ~3.0M @ **~1700q**, which actually approaches Google's
-1175q regime but at a fraction of the qubit wins they claim.
+If Kim 2a+2b lands on top of that, the floor could move toward
+**3.1M–3.3M**, but with a much heavier inversion rewrite. If Luo register
+sharing also lands, qubits could drop to ~2.0k-ish, still not enough to
+meet the user's aspirational ~1100–1200 total without a broader scaffold
+collapse.
