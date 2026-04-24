@@ -5381,8 +5381,14 @@ pub fn build() -> Vec<Op> {
     // We start at the safe bound and claw back by lowering only as far as
     // multi-seed sampling remains clean.
     // pair1 and pair2 use independent Kaliski inverts; probe lower on both.
-    let pair1_iters = 407;
-    let pair2_iters = 404;
+    // *** TEMP ***: set both to 2n-1 = 511 so Kaliski runs its full
+    // convergence bound on every shot. Under this regime the raw
+    // Kaliski exponent K becomes input-INdependent (K = 2n-1 always),
+    // which is the scale-factor convention the single-inversion moonshot
+    // needs. Huge Toffoli regression vs the previous 407/404 iter-shaved
+    // baseline, intentional.
+    let pair1_iters = 511;
+    let pair2_iters = 511;
 
     // Step 1-2: Px -= Qx, Py -= Qy
     mod_sub_qb(b, &tx, &ox, p);

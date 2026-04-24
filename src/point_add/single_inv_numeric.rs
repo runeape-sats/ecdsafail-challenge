@@ -172,18 +172,48 @@ pub fn simulate_single_inv_scaffold(
     // State after step (2):
     let mut tx = sub_mod(px, qx, p); // = dx
     let mut ty = sub_mod(py, qy, p); // = dy
-    let dx_snapshot = tx; // kept around for algebraic references
-    let dy_snapshot = ty;
 
-    // Step (3): a = tx * ty.
+    // Step (3): a = tx * ty (allocated scratch, Bennett-style).
     let a = tx.mul_mod(ty, p);
-
-    // Step (4): Kaliski body entry gives inv_raw = a^{-1} * 2^{2n} mod p.
-    // The scale factor is classically known, so we simulate the post-halve
-    // behaviour: a_inv = a^{-1}, and inv_raw carries the 2^{2n} factor.
     let a_inv = a.inv_mod(p).expect("dx*dy must be invertible");
 
-    // Step (5): lam ← ty^2 * a_inv = dy^2 * (dx dy)^{-1} = dy/dx = λ.
+    // ------------------------------------------------------------------
+    // New strategy (workaround iii): match the existing 2-Kaliski scaffold
+    // choreography but drive it from a SINGLE a_inv = (dx*dy)^{-1}.
+    //
+    // Mirror of the current build() flow, scaled so one Kaliski instead of two:
+    //
+    //   (5a) lam = ty^2 * a_inv = dy² / (dx·dy) = dy/dx = λ.
+    //         -- one quantum mul (dy²) + one quantum mul (* a_inv)
+    //
+    //   (6)  Build tx -> Rx - Qx, identical to build():
+    //          tx := dx - λ²  ;  tx += 3Qx ; tx := -tx ; tx += Qx     (tx = Rx - Qx)
+    //
+    //   (7a) ty += λ * tx. That puts ty = dy + λ*(Rx - Qx). Current build
+    //        reaches this same value just before its mul3_between_pair.
+    //
+    //   (7b) **New trick**: since we already have a_inv live, instead of
+    //        a full second Kaliski we can compute Ry via algebra. Observe:
+    //          Ry + Qy = λ*(Qx - Rx) = -λ*(Rx - Qx) = -λ*tx.
+    //          dy + λ*(Rx - Qx) = dy - (Ry + Qy) = (Py - Qy) - Ry - Qy
+    //                            = Py - 2Qy - Ry
+    //        So ty after (7a) holds (Py - 2Qy - Ry).
+    //        Needed ty = Ry. Gap: ty += (Ry - (Py - 2Qy - Ry)) = 2Ry - Py + 2Qy.
+    //        That has Py and Ry in it — not classical.
+    //
+    //        Equivalent rearrangement: ty -= 2*(λ*tx + (Py - Qy - Ry))
+    //        Still contains Py and Ry.
+    //
+    //   Going from (7a)'s ty value to Ry reversibly without a second
+    //   Kaliski remains the open problem. The scaffold below implements
+    //   step (5a)+(6)+(7a) faithfully, then uses an ANCILLA write as
+    //   workaround (ii) rather than workaround (iii).
+    //
+    //   That still costs 1 Kaliski + (4 muls + 1 cleanup mul to uncompute
+    //   the remaining ty leftover). 1 Kaliski is the key saving.
+    // ------------------------------------------------------------------
+
+    // Step (5): lam ← dy^2 * a_inv = λ.
     let lam = ty.mul_mod(ty, p).mul_mod(a_inv, p);
 
     // Step (6): Rx ← λ² - Px - Qx, fold into tx, leave tx = Rx - Qx.
@@ -254,7 +284,7 @@ pub fn simulate_single_inv_scaffold(
     let ry = sub_mod(lam.mul_mod(qx_sub_rx, p), qy, p);
     ty = ry;
 
-    let _ = (dx_snapshot, dy_snapshot, a_inv, lam);
+    let _ = (a_inv, lam);
     (rx, ty)
 }
 
@@ -269,6 +299,84 @@ pub fn simulate_single_inv_scaffold(
 pub fn single_inv_add_fold_lam(px: U256, py: U256, qx: U256, qy: U256) -> (U256, U256) {
     // Noop wrapper for now — we don't actually believe this saves anything.
     single_inv_add_skip_inv_dx(px, py, qx, qy)
+}
+
+/// Classical-numeric "trace the scaffold" helper: given raw Kaliski
+/// output scale factors, tell me what the current 2-Kaliski `build()`
+/// leaves in ty after pair1. This is a brute-force search: try different
+/// plausible scale-factor conventions (pair1_iters=407, 2n=512, their
+/// combinations) until one makes the final (Rx, Ry) match the reference.
+/// It exists to pin down exactly what the quantum scaffold is doing,
+/// which is necessary to port the choreography into a single-Kaliski
+/// version.
+///
+/// Caller passes `pair1_iters`, `pair2_iters`, and inv_scale_exp (the
+/// exponent applied to inv_raw at Kaliski body entry). The function
+/// replays the existing build() algebra under that hypothesis and
+/// returns the final (tx, ty).
+#[allow(dead_code)]
+pub fn replay_build_scaffold(
+    px: U256,
+    py: U256,
+    qx: U256,
+    qy: U256,
+    pair1_iters: usize,
+    pair2_iters: usize,
+    inv_scale_exp: i64,
+) -> (U256, U256) {
+    let p = SECP256K1_P;
+
+    let two = U256::from(2);
+    let pow2 = |e: i64| -> U256 {
+        if e >= 0 {
+            two.pow_mod(U256::from(e as u64), p)
+        } else {
+            two.pow_mod(U256::from((-e) as u64), p)
+                .inv_mod(p)
+                .expect("2 invertible")
+        }
+    };
+
+    let mut tx = sub_mod(px, qx, p); // dx
+    let mut ty = sub_mod(py, qy, p); // dy
+    let dx = tx;
+    let dy = ty;
+
+    // Existing build(): kaliski_forward on tx = dx yields `r = -dx^{-1} * 2^{E}`
+    // for some E. The `-` is absorbed into the body's sign convention.
+    let sign = U256::ZERO.wrapping_sub(U256::from(1)) % p; // = -1 mod p
+    let inv_raw = sign.mul_mod(dx.inv_mod(p).unwrap(), p).mul_mod(pow2(inv_scale_exp), p);
+
+    // pair1_mul1: lam_inner := ty * inv_raw   (acc = 0 before)
+    let lam_inner_pre = ty.mul_mod(inv_raw, p);
+    // pair1_halve: apply pair1_iters halvings.
+    let lam_inner = lam_inner_pre.mul_mod(pow2(-(pair1_iters as i64)), p);
+    // pair1_mul2: ty += lam_inner * tx.
+    ty = ty.add_mod(lam_inner.mul_mod(tx, p), p);
+
+    // Between pair1 and pair2: arithmetic on tx only.
+    let lam = lam_inner;
+    let lam2 = lam.mul_mod(lam, p);
+    tx = sub_mod(tx, lam2, p); // dx - λ² (modulo any scale factor in lam)
+    tx = tx.add_mod(qx.mul_mod(U256::from(3), p), p); // +3Qx
+    tx = sub_mod(U256::ZERO, tx, p); // negate
+
+    // mul3_between_pair: ty is NOT 0 here under arbitrary scale; trace it.
+    ty = ty.add_mod(lam.mul_mod(tx, p), p); // ty += lam * tx
+
+    // pair2_kaliski_forward on tx gives inv_raw2 = -tx^{-1} * 2^{inv_scale_exp}.
+    let inv_raw2 = sign.mul_mod(tx.inv_mod(p).unwrap(), p).mul_mod(pow2(inv_scale_exp), p);
+    // pair2_double: lam doubled pair2_iters times.
+    let lam_scaled = lam.mul_mod(pow2(pair2_iters as i64), p);
+    // pair2_mul: ty += lam_scaled * inv_raw2.
+    ty = ty.add_mod(lam_scaled.mul_mod(inv_raw2, p), p);
+    // pair2_cleanup: ty -= Qy.
+    ty = sub_mod(ty, qy, p);
+
+    // post-body: tx += Qx.
+    tx = tx.add_mod(qx, p);
+
+    (tx, ty)
 }
 
 #[cfg(test)]
@@ -306,6 +414,27 @@ mod tests {
             *l = *rng;
         }
         U256::from_limbs(limbs) % SECP256K1_P
+    }
+
+    #[test]
+    fn find_build_scale_convention() {
+        // Probe several plausible Kaliski scale conventions until we find
+        // one under which the replay produces the reference (Rx, Ry).
+        let c = curve();
+        let (px, py) = c.mul(c.gx, c.gy, U256::from(123_456_789u64));
+        let (qx, qy) = c.mul(c.gx, c.gy, U256::from(987_654_321u64));
+        let (rx_ref, ry_ref) = c.add(px, py, qx, qy);
+        let pair1 = 407i64;
+        let pair2 = 404i64;
+        let candidates: Vec<i64> =
+            vec![256, 512, 2 * 256, pair1, pair2, 2 * pair1, 2 * pair2, pair1 + pair2];
+        for &e in &candidates {
+            let (rx, ry) =
+                replay_build_scaffold(px, py, qx, qy, pair1 as usize, pair2 as usize, e);
+            let rx_ok = rx == rx_ref;
+            let ry_ok = ry == ry_ref;
+            eprintln!("scale_exp={e}: rx_ok={rx_ok} ry_ok={ry_ok}");
+        }
     }
 
     #[test]

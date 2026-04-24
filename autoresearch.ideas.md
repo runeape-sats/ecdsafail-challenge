@@ -174,6 +174,28 @@ Eliminates m_hist (-409q). Case computed from state each iter, not stored.
 - **HRSL cumulative swap state**: +3.2M Toffoli, dead end.
 - **Toom-3 / Fermat / Edwards-coord swap**: analyzed and rejected.
 
+## Moonshot progress: single-Kaliski point-add
+- **Stage 1 (classical math)**: DONE. `single_inv_numeric::single_inv_add` /
+  `single_inv_add_skip_inv_dx` pass 200/200 trials vs reference. Formula for
+  a single-inversion affine add IS correct.
+- **Stage 1.5 (reversibility scan)**: DONE. The naive scaffold hits a wall:
+  going from `ty = dy` to `ty = Ry` via `ty −= λ*tx` leaves `Py + Ry` in ty,
+  and Py is quantum. Resolutions: (i) 2-Kaliski status quo; (ii) Bennett
+  output register for Ry at +n persistent qubits; (iii) use a 2ⁿⁿ-style
+  scale-factor trick to flip the sign. See `single_inv_plan.md` for details.
+- **Stage 1.75 (replay existing scaffold)**: PARTIAL. Tried to reproduce
+  current build()'s (Rx, Ry) by classical simulation under various scale
+  conventions; none matched with naive `E = 2n`, `E = iters`, or simple
+  combos. Conclusion: **Kaliski's exponent K is NOT pair_iters**. K is the
+  termination iteration index, which is input-dependent (typically
+  ~256–270 for secp256k1). The existing build() relies on the exact K and
+  the pair_halve/pair_double loops cancel it into `1` on the nose for every
+  shot. To port into a single-Kaliski scaffold, the replay must either:
+    - reproduce the input-dependent K exactly, or
+    - unify pair1 + pair2 into a combined halve/double schedule that cancels K.
+  This is solvable but requires reading `kaliski_iteration` semantics more
+  carefully than this session got to.
+
 ## Negative results from this session (don't re-explore without new info)
 - **`mod_mul_write_into_zero_acc_schoolbook_lowq` at pair1_mul1**: deterministic phase-garbage (1 batch in 1/20480 shots, ALT_SEED tag=5, reproducible across two runs). The forward+inverse pair is in principle phase-clean (it is a gate-level inverse of a gate-level inverse), but as a drop-in replacement for the schoolbook mul inside the Kaliski body it breaks the phase contract. Microbench confirms peak is NOT reduced by the lowq substitution (both variants are 1797 at n=256) — the 2n=512 tmp_ext dominates. Kept the helper as `#[allow(dead_code)]` with a note, since the negative result is important data for the next structural move.
 - **`KAL_FREE_S`** (free `st.s` after `kaliski_forward`, reallocate before `kaliski_backward`): catastrophic phase failure (64/64 batches across all seeds). Disproves the naive assumption that `st.s = 1` post-forward in the point-add scaffold; actual value must depend on the iter-at-termination per-shot. Any freeing of `st.s` requires measuring/remembering the actual final value classically, which collapses superposition — not viable inside a Kaliski body that must be reversible around the next body step.
