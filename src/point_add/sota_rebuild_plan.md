@@ -109,31 +109,36 @@ Need to shave per-round to ~7n CCX. That matches HRSL's reported
 "swap-based" Kaliski where one sub + one add per round, plus the
 cswaps. 7n × 2n = 14n² = ~918k per inversion, 2× = 1.84M. Budget fits.
 
-## Phase A/B status (SESSION 2026-04-24)
+## Phase A/B/C status (SESSION 2026-04-24)
 
 **Phase A COMPLETE**: reversible Kim iteration with matching backward.
-- `src/point_add/kim_inv_circuit.rs::kim_iteration_forward` and `_backward`
-- Full 512-iter round-trip at n=256 on secp256k1-shaped inputs clears all
-  state (u, v, r, s, 512 m_hist, 512 both_odd_hist).
-- Forward cost: 1.25M Toffoli, peak 3590 qubits.
+Round-trip clean at n=256 over full 2n=512 iters.
 
 **Phase B COMPLETE**: init + 2n forward produces correct ±x^-1*2^{2n}.
-- Verified on 5 random secp256k1 inputs via Simulator.
-- Remaining mechanical work: (a) Solinas reduction of wide r to narrow
-  output register, (b) CX copy, (c) reverse init + 2n backward.
 
-**Phase C NEXT**: either
-- (C1) finish the `kim_inv(x, out)` Bennett primitive including mod-p
-  reduction of r, or
-- (C2) skip the Bennett wrapper and go straight to a single-inversion
-  `build_sota()` that uses Kim's wide r inline as a multiplicand,
-  eliminating one inversion + avoiding a separate Solinas-reduction step.
+**Phase C COMPLETE**: full reversible `kim_inv(x, out)` with all state
+cleanup, verified 3/3 trials via Simulator.
+- Toffoli cost: 2,530,240
+- Peak qubits (standalone): 4102
+- `x` unchanged, `out` holds ± x^-1 * 2^{2n} mod p, no ancilla leaks.
 
-C2 is the more SOTA-shaped route: single Kim inversion on `dx`, with the
-wide r used directly in the quantum mul that forms λ. That mul absorbs
-the 2^{2n} scale factor implicitly via its own Solinas reduction, so we
-don't pay a separate mod-p step. This is how HRSL/Google-style circuits
-typically avoid an explicit rescale.
+**Phase D NEXT**: wire `kim_inv` into a single-inversion `build_sota()`.
+Estimated budget:
+- 1 kim_inv call: 2.53M
+- λ via dy * inv_dx (+ uncompute): ~300k
+- λ² squaring (+ uncompute): ~260k
+- λ * (Rx-Qx) mul (+ uncompute): ~300k
+- classical 2^{-2n} unscale (if not absorbed): ~200k
+- exact affine ops: ~40k
+- **projected total: ~3.6M Toffoli** (vs current 4.18M, −14%)
+
+This beats the baseline but isn't SOTA alone. Additional levers needed
+to reach 2.7M:
+- Luo register sharing on Kim state: qubit reduction, ~small Toffoli cost.
+- HRSL workspace reuse: -258 peak qubits + unlocks karatsuba at mul sites.
+- Absorb 2^{-2n} unscale into the first mul's Solinas to save ~200k.
+
+Combined projection: 2.9-3.1M, within striking distance of SOTA (2.7M).
 
 ## Ordering plan
 
