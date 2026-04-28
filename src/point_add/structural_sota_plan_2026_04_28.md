@@ -519,9 +519,21 @@ shows the control tax: implementing every step with generic quantum-controlled
 modular adds costs `77,728 CCX/window`, or `≈2.72M` for 35 windows. Therefore
 the remaining SOTA blocker is precise: keep the branch-numerator arithmetic,
 but avoid paying generic controlled full-width modular adds for the branch
-selection. Needed ideas include a signed-add/sub mux primitive, blockwise
-branch specialization, or a reversible history scheme that turns branch bits
-into low-cost fixed-control blocks without huge QROM.
+selection. `low_ratio_microstep_update_generates_branch_bits_without_full_denominator`
+shows branch generation itself is small: with `h=g/f mod 2^t`, the next branch
+bit is `h&1` and h updates 2-adically by
+
+```text
+C: h' = h/2
+B: h' = (h+1)/2
+A: h' = (h-1)/(2h) mod 2^(t-1)
+```
+
+So the selector generator can use only a 16-bit h register plus small delta;
+the reversibility payload is the branch history. Needed ideas include a
+signed-add/sub mux primitive, blockwise branch specialization, or a reversible
+history scheme that turns branch bits into low-cost fixed-control blocks without
+huge QROM.
 
 This reopens BY as a live SOTA-shaped route but with precise remaining
 obstacles: branch/matrix history compression, selected Hermite-factor

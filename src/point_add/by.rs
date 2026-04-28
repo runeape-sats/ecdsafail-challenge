@@ -3313,6 +3313,92 @@ mod tests {
         assert!(approx35 < 2_000_000.0, "naive fixed Hermite arithmetic is too costly to be SOTA-shaped");
     }
 
+    fn inv_odd_mod_pow2_for_test(a: i128, bits: usize) -> i128 {
+        if bits == 0 {
+            return 0;
+        }
+        let modulus = 1i128 << bits;
+        let (x, _, g) = egcd_i128_for_test(a.rem_euclid(modulus), modulus);
+        assert_eq!(g, 1);
+        x.rem_euclid(modulus)
+    }
+
+    fn h_ratio_step_for_test(delta: i64, h: i128, t: usize) -> (i64, i128, bool) {
+        assert!(t >= 1);
+        let odd = (h & 1) != 0;
+        let next_bits = t - 1;
+        if next_bits == 0 {
+            let next_delta = if delta > 0 && odd { 1 - delta } else { 1 + delta };
+            return (next_delta, 0, odd);
+        }
+        let next_mod = 1i128 << next_bits;
+        if delta > 0 && odd {
+            // h' = ((g-f)/2)/g = (h-1)/(2h) mod 2^(t-1).
+            let inv_h = inv_odd_mod_pow2_for_test(h, next_bits);
+            let next_h = (((h - 1) / 2) * inv_h).rem_euclid(next_mod);
+            (1 - delta, next_h, odd)
+        } else if odd {
+            // h' = (g+f)/(2f) = (h+1)/2 mod 2^(t-1).
+            (1 + delta, ((h + 1) / 2).rem_euclid(next_mod), odd)
+        } else {
+            // h' = g/(2f) = h/2 mod 2^(t-1).
+            (1 + delta, (h / 2).rem_euclid(next_mod), odd)
+        }
+    }
+
+    #[test]
+    fn low_ratio_microstep_update_generates_branch_bits_without_full_denominator() {
+        // BY branch generation does not need a full 256-bit denominator pair.
+        // With h=g/f mod 2^t and odd f, the next branch bit is h&1 and h has
+        // a closed 2-adic update. This keeps the selector generator at
+        // O(w)-bit state; the hard part is selected modular replay, not finding
+        // the branch bits.
+        const W: usize = 16;
+        let mut hasher = sha3::Shake128::default();
+        hasher.update(b"by-low-ratio-step-v1");
+        let mut reader = hasher.finalize_xof();
+        let mut buf = [0u8; 24];
+        for _ in 0..20_000 {
+            reader.read(&mut buf);
+            let mut f = truncate_i128((u64::from_le_bytes(buf[0..8].try_into().unwrap()) as i128) | 1, W);
+            let mut g = truncate_i128(u64::from_le_bytes(buf[8..16].try_into().unwrap()) as i128, W);
+            let mut delta = (u64::from_le_bytes(buf[16..24].try_into().unwrap()) % 41) as i64 - 20;
+            for t in (1..=W).rev() {
+                f = truncate_i128(f, t);
+                g = truncate_i128(g, t);
+                let modulus = 1i128 << t;
+                let h = (g.rem_euclid(modulus) * inv_odd_mod_pow2_for_test(f, t)).rem_euclid(modulus);
+                let (next_delta_h, next_h, odd_h) = h_ratio_step_for_test(delta, h, t);
+                let odd_g = (g & 1) != 0;
+                assert_eq!(odd_h, odd_g, "h parity did not match g parity");
+                if delta > 0 && odd_g {
+                    let nf = g;
+                    let ng = (g - f) / 2;
+                    delta = 1 - delta;
+                    f = nf;
+                    g = ng;
+                } else if odd_g {
+                    g = (g + f) / 2;
+                    delta = 1 + delta;
+                } else {
+                    g /= 2;
+                    delta = 1 + delta;
+                }
+                assert_eq!(delta, next_delta_h, "delta update mismatch");
+                if t > 1 {
+                    g = truncate_i128(g, t - 1);
+                    f = truncate_i128(f, t); // next loop truncates f to t-1 at top.
+                    let next_mod = 1i128 << (t - 1);
+                    let f_next = truncate_i128(f, t - 1);
+                    let g_next = truncate_i128(g, t - 1);
+                    let h_from_fg = (g_next.rem_euclid(next_mod) * inv_odd_mod_pow2_for_test(f_next, t - 1)).rem_euclid(next_mod);
+                    assert_eq!(next_h, h_from_fg, "h update mismatch at t={t}");
+                }
+            }
+        }
+        eprintln!("BY low-ratio branch generator: 16-bit h+delta state suffices per window; branch history is the reversibility payload");
+    }
+
     fn branch_bits_for_lowword_window(w: usize, mut delta: i64, mut f: i128, mut g: i128) -> Vec<bool> {
         let mut bits = Vec::with_capacity(w);
         f = truncate_i128(f, w);
