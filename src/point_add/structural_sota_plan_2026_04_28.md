@@ -352,10 +352,18 @@ states, matching the classical `(T+m*p)/2^16` result. Finally,
 full classical `w=16`, 35-window scaled BY tagged-DIV algebra: `0/3000`
 failures at 560 steps, bottom channel zero, and output `sign(f)*r-1 = y/x`.
 
-This reopens BY as a live SOTA-shaped route: approximate scaled modular jump is
-now plausibly comparable to the integer denominator jump, instead of `>2M`.
-The next implementation target is a real env-gated approximate highfold+batched
-shift row primitive and then a BY tagged-DIV scaffold.
+Caveat: `noncanonical_batched_shift_needs_quotient_uncompute` shows the
+highfold quotient is not recoverable from the scaled output alone: `T` and
+`T+p` produce the same scaled residue but different low-word corrections. A
+real reversible row primitive must therefore keep the quotient, recover it from
+row sources, or fuse row reduction with cleanup. The canonical batched shift is
+real; the noncanonical row highfold is still an integration problem.
+
+This reopens BY as a live SOTA-shaped route but with a precise remaining
+obstacle: approximate scaled modular jump is plausibly comparable to the integer
+denominator jump only if quotient cleanup is fused cheaply with row formation.
+The next implementation target is a fixed-matrix row circuit that proves this
+quotient cleanup, then a BY tagged-DIV scaffold.
 
 ### Program B — triangular one-inversion schedule (highest payoff, highest risk)
 

@@ -1837,6 +1837,31 @@ mod tests {
     }
 
     #[test]
+    fn noncanonical_batched_shift_needs_quotient_uncompute() {
+        // Important caveat for the highfold idea: for noncanonical T, the final
+        // scaled residue does not uniquely encode the quotient k such that
+        // T=k*p+R. T and T+p represent the same residue and produce the same
+        // scaled output, but their low-word correction m differs by one. A
+        // reversible circuit must therefore either keep k, recover it from the
+        // row sources, or fuse reduction with cleanup; it cannot just erase k
+        // from the output row alone.
+        let p = SECP256K1_P;
+        let p512 = u256_to_u512_for_by_tests(p);
+        let pinv = 51_919u64;
+        let mask = (1u64 << 16) - 1;
+        let t = U256::from(123456789u64);
+        let low0 = t.as_limbs()[0] & mask;
+        let m0 = low0.wrapping_mul((!pinv).wrapping_add(1)) & mask;
+        let q0: U512 = (u256_to_u512_for_by_tests(t) + U512::from(m0) * p512) >> 16usize;
+        let t1 = u256_to_u512_for_by_tests(t) + p512;
+        let low1 = t1.as_limbs()[0] & mask;
+        let m1 = low1.wrapping_mul((!pinv).wrapping_add(1)) & mask;
+        let q1: U512 = (t1 + U512::from(m1) * p512) >> 16usize;
+        assert_eq!(q0, q1, "scaled residue should ignore representative quotient");
+        assert_ne!(m0, m1, "correction m should change with representative quotient");
+    }
+
+    #[test]
     fn highfold_then_batched_halve16_matches_row_distribution() {
         // For actual BY row values T=a*x+b*y with signed w=16 matrix entries,
         // first folding k=T>>256 copies of p brings T into canonical range, and
