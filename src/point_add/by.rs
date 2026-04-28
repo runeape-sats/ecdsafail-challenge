@@ -3221,6 +3221,93 @@ mod tests {
         assert!(approx35 > 2_500_000.0, "naive controlled branch replay unexpectedly SOTA-shaped");
     }
 
+    fn emit_cmod_signed_mux_add_for_test(
+        b: &mut super::super::B,
+        acc: &[super::super::QubitId],
+        a: &[super::super::QubitId],
+        odd_ctrl: super::super::QubitId,
+        neg_ctrl: super::super::QubitId,
+        p: U256,
+    ) {
+        // Valid when neg_ctrl => odd_ctrl. Computes
+        //   acc += odd_ctrl ? (neg_ctrl ? -a : a) : 0  (mod p).
+        // It shares the ctrl&a addend for the add/sub cases, instead of paying
+        // separate cmod_add and cmod_sub bodies.
+        let n = acc.len();
+        let f = b.alloc_qubits(n);
+        for i in 0..n {
+            b.ccx(odd_ctrl, a[i], f[i]);
+        }
+        for &q in &f {
+            b.cx(neg_ctrl, q);
+        }
+        super::super::cadd_nbit_const_fast(b, &f, p.wrapping_add(U256::from(1u64)), neg_ctrl);
+        super::super::mod_add_qq_fast(b, acc, &f, p);
+        super::super::csub_nbit_const_fast(b, &f, p.wrapping_add(U256::from(1u64)), neg_ctrl);
+        for &q in &f {
+            b.cx(neg_ctrl, q);
+        }
+        for i in 0..n {
+            let m = b.alloc_bit();
+            b.hmr(f[i], m);
+            b.cz_if(odd_ctrl, a[i], m);
+        }
+        b.free_vec(&f);
+    }
+
+    #[test]
+    fn signed_mux_controlled_modular_add_works_but_not_enough() {
+        let p = SECP256K1_P;
+        let mut b = super::super::B::new();
+        let odd = b.alloc_qubit();
+        let neg = b.alloc_qubit();
+        let acc = b.alloc_qubits(256);
+        let a = b.alloc_qubits(256);
+        emit_cmod_signed_mux_add_for_test(&mut b, &acc, &a, odd, neg, p);
+        let ccx = count_ccx(&b.ops);
+        let peak = b.peak_qubits;
+        let num_qubits = b.next_qubit as usize;
+        let num_bits = b.next_bit as usize;
+        let ops = b.ops;
+        let cases = [(false, false), (true, false), (true, true)];
+        let mut sx = Sampler::new(b"by-signed-mux-acc-v1", p);
+        let mut sy = Sampler::new(b"by-signed-mux-a-v1", p);
+        for &(odd_v, neg_v) in &cases {
+            for _ in 0..16 {
+                let x = sx.next();
+                let y = sy.next();
+                let expected = if !odd_v {
+                    x
+                } else if neg_v {
+                    subm(x, y, p)
+                } else {
+                    addm(x, y, p)
+                };
+                let mut hasher = sha3::Shake128::default();
+                hasher.update(b"by-signed-mux-sim-v1");
+                let mut xof = hasher.finalize_xof();
+                let mut sim = crate::sim::Simulator::new(num_qubits, num_bits, &mut xof);
+                if odd_v {
+                    *sim.qubit_mut(odd) |= 1;
+                }
+                if neg_v {
+                    *sim.qubit_mut(neg) |= 1;
+                }
+                set_slice_u512_by(&mut sim, &acc, u256_to_u512_for_by_tests(x));
+                set_slice_u512_by(&mut sim, &a, u256_to_u512_for_by_tests(y));
+                sim.apply(&ops);
+                assert_eq!(get_slice_u512_by(&sim, &acc), u256_to_u512_for_by_tests(expected));
+                assert_eq!(get_slice_u512_by(&sim, &a), u256_to_u512_for_by_tests(y));
+            }
+        }
+        let static_a_total = 560.0 * (ccx as f64 + 1280.0 + 255.0) + 2.0 * 560.0 * 255.0;
+        eprintln!(
+            "BY signed mux controlled add/sub: ccx={ccx}, peak={peak}q, static_A_total≈{static_a_total:.0}"
+        );
+        assert!(ccx < 2_000, "signed mux failed to beat separate cmod add+sub");
+        assert!(static_a_total > 2_000_000.0, "signed mux alone unexpectedly solves selected replay");
+    }
+
     #[test]
     fn enumerated_branch_block_select_explodes_beyond_single_step() {
         // Another tempting idea is to group b divsteps and SELECT one fixed

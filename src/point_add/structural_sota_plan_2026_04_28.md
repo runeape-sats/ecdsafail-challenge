@@ -571,7 +571,19 @@ b=4: 58 sequences, ≈38.436M
 
 So block specialization cannot mean enumerating all branch case sequences and
 SELECTing one. It must exploit algebraic sharing between cases or a new
-controlled-add primitive.
+controlled-add primitive. `signed_mux_controlled_modular_add_works_but_not_enough`
+implements the obvious shared primitive for the first odd update:
+
+```text
+acc += odd ? (neg ? -a : a) : 0
+cost = 1790 CCX, peak 1287q
+separate cmod_add+cmod_sub = 2560 CCX
+```
+
+It is correct on random basis states and saves ~30% for the A/B first update,
+but a full selected replay with this mux and static A still costs `≈2.15M`.
+Thus the primitive is useful but not sufficient; the A-only update still needs a
+non-static treatment or a deeper algebraic refactor.
 
 This reopens BY as a live SOTA-shaped route but with precise remaining
 obstacles: branch/matrix history compression, selected Hermite-factor
