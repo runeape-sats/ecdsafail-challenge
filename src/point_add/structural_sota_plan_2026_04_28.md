@@ -169,6 +169,20 @@ coherently, use a Bernstein-Yang/divstep variable that avoids full comparisons,
 or synthesize a matrix application whose cost beats the per-step loop despite
 those predicates.
 
+Positive qubit-side result: `window_hint_bits_can_compress_history_but_not_select_matrix_alone`
+records the actual matrix choice as a small per-window hint instead of per-step
+history. On 5k sampled trajectories with key `(low8(u), low8(v), u>v)`:
+
+| t | max matrices/key | hint bits/window | total hint bits |
+|---:|---:|---:|---:|
+| 4  | 8  | 3 | 306 |
+| 8  | 23 | 5 | 255 |
+| 16 | 34 | 6 | 156 |
+
+So window hints can plausibly save 100-250 history qubits versus `m_hist`, but
+only if a selected matrix can be applied cheaper than replaying microsteps. This
+is qubit-structural, not yet a Toffoli route.
+
 Next concrete work: extend `kaliski_jump.rs` from matrix observation into a
 matrix-application lower-bound/synthesis search for `t=2,3`, with comparator
 cost included. If t=2 cannot beat two ordinary iterations after paying for the

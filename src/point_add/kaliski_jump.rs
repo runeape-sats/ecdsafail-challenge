@@ -563,6 +563,51 @@ mod tests {
     }
 
     #[test]
+    fn window_hint_bits_can_compress_history_but_not_select_matrix_alone() {
+        // Positive/negative split for the next structural path. Low bits + one
+        // initial comparator do NOT predict a window matrix (previous test),
+        // but the number of observed matrices per key is small enough that a
+        // few forward-recorded hint bits per window could replace per-iteration
+        // history. This is a qubit-compression idea, not a Toffoli win unless
+        // matrix application is also cheaper than replaying microsteps.
+        use std::collections::{BTreeMap, BTreeSet};
+
+        const W: usize = 8;
+        const INPUTS: usize = 5_000;
+        let mask = (U256::from(1u64) << W).wrapping_sub(U256::from(1u64));
+        let mut sampler = Sampler::new(b"window-hint-bits-v1", SECP256K1_P);
+        for &t in &[4usize, 8, 16] {
+            let mut by_key: BTreeMap<(u16, u16, bool), BTreeSet<(Mat2, Mat2)>> = BTreeMap::new();
+            let mut windows = 0usize;
+            for _ in 0..INPUTS {
+                let mut u = SECP256K1_P;
+                let mut v = sampler.next();
+                for _ in (0..407).step_by(t) {
+                    if v.is_zero() { break; }
+                    let key = ((u & mask).to::<u16>(), (v & mask).to::<u16>(), u > v);
+                    let (nu, nv, obs) = observe_window(u, v, W, t);
+                    by_key.entry(key).or_default().insert((obs.uv_mat, obs.rs_mat));
+                    windows += 1;
+                    u = nu;
+                    v = nv;
+                }
+            }
+            let max_per_key = by_key.values().map(|s| s.len()).max().unwrap_or(1);
+            let mean_per_key = by_key.values().map(|s| s.len()).sum::<usize>() as f64 / by_key.len() as f64;
+            let hint_bits = usize::BITS as usize - (max_per_key - 1).leading_zeros() as usize;
+            let n_windows = (407 + t - 1) / t;
+            let history_bits = hint_bits * n_windows;
+            eprintln!(
+                "t={t} w={W}+gt: windows={} keys={} mean_mats/key={mean_per_key:.2} max_mats/key={} hint_bits/window={} total_hint_bits={}",
+                windows, by_key.len(), max_per_key, hint_bits, history_bits
+            );
+            if t == 16 {
+                assert!(history_bits < 407, "t=16 hints did not beat m_hist: {history_bits}");
+            }
+        }
+    }
+
+    #[test]
     fn hybrid_kaliski_window_survey_test() {
         for &(w, t) in &[(6usize, 4usize), (8usize, 4usize), (8usize, 6usize)] {
             let s = hybrid_kaliski_window_survey(b"hybrid-kaliski-window-seed-v1", 10_000, w, t);
