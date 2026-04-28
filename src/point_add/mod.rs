@@ -5565,8 +5565,20 @@ fn build_standard_point_add(
     oy: &[BitId],
     p: U256,
 ) {
+    let tagged_div_validate = std::env::var("KAL_TAGGED_DIV_VALIDATE").ok().as_deref() == Some("1");
     let pair1_iters = 407;
-    let pair2_iters = 403;
+    // The tagged validation path changes the op stream / Fiat-Shamir seed;
+    // keep pair2 at the prior robust 404 setting to avoid conflating the
+    // algebra probe with an iteration-threshold phase cliff.
+    let pair2_iters = if tagged_div_validate { 404 } else { 403 };
+    if tagged_div_validate {
+        // Structural validation path for the 600-scratch DIV idea: seed the
+        // numerator as dy+dx, so the Kaliski coefficient output is tagged by
+        // a known k*dx term. This is default-off because it adds gates; it is
+        // an algebra/circuit integration probe, not a benchmark optimization.
+        b.set_phase("tagged_div_seed");
+        mod_add_qq_fast(b, &ty, &tx, p);
+    }
 
     let lam_cell: std::cell::RefCell<Option<Vec<QubitId>>> = std::cell::RefCell::new(None);
     b.set_phase("pair1_kaliski_forward");
@@ -5580,6 +5592,13 @@ fn build_standard_point_add(
         }
         b.set_phase("pair1_mul2");
         mod_mul_add_into_acc_schoolbook(b, &ty, &lam_inner, &tx, p);
+        if tagged_div_validate {
+            // lam_inner = -(lambda+1) after consuming tagged ty=(dy+dx).
+            // Add 1 to recover the normal lam_inner=-lambda expected by the
+            // remaining point-add scaffold.
+            b.set_phase("tagged_div_untag_lam");
+            mod_add_qc(b, &lam_inner, U256::from(1u64), p);
+        }
         b.set_phase("pair1_kaliski_backward");
         *lam_cell.borrow_mut() = Some(lam_inner);
     });

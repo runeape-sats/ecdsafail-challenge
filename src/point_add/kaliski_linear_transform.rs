@@ -188,6 +188,31 @@ fn coefficient_transform_shape() {
 }
 
 #[test]
+fn dx_tagged_seed_recovers_division_with_negligible_exception() {
+    // Approximate tolerance reopens the self-cleaning DIV route. Seed the
+    // coefficient with (y + x) instead of y. Then
+    //   T(x)*(0, y+x) = (k*y + k*x, 0) = (k*y - 2^ITERS, 0)
+    // because k*x = -2^ITERS. Adding the known scale recovers k*y, and a
+    // known rescale gives y/x. The only zero-coefficient exceptional set is
+    // y = -x, probability ≈ 1/p for random field inputs.
+    let p = SECP256K1_P;
+    let scale = pow2_mod(ITERS);
+    let scale_inv = scale.inv_mod(p).unwrap();
+    for seed in 1..100u64 {
+        let x = random_element(seed);
+        let y = random_element(seed + 10_000);
+        let tagged = add_mod(y, x, p);
+        assert_ne!(tagged, U256::ZERO, "random sample hit y=-x exceptional set");
+        let seq = branch_sequence(x, ITERS);
+        let (r_tagged, s_out) = apply_coeffs(&seq, U256::ZERO, tagged);
+        assert_eq!(s_out, U256::ZERO);
+        let k_y = add_mod(r_tagged, scale, p); // r + 2^ITERS = k*y
+        let quotient = neg_mod(k_y, p).mul_mod(scale_inv, p);
+        assert_eq!(quotient, y.mul_mod(x.inv_mod(p).unwrap(), p));
+    }
+}
+
+#[test]
 fn dy_seeded_forward_computes_scaled_slope_and_zeroes_s() {
     let p = SECP256K1_P;
     let scale = pow2_mod(ITERS);
@@ -244,6 +269,66 @@ fn end_state_needs_coefficient_registers_to_recover_branch() {
 
     assert!(denom_conflicts > 0, "denominator-only end-state unexpectedly recovered branches");
     assert_eq!(full_conflicts, 0, "full end-state branch recovery collided in samples");
+}
+
+#[test]
+fn low_bit_end_state_branch_classifier_is_not_approx_good_enough() {
+    // Approximate incorrectness reopens rare exceptional sets, but it does not
+    // make a crude local branch predicate viable. Train a best-majority lookup
+    // table from low bits of the end-state registers, then test on disjoint
+    // samples. Even with coefficient registers included, the error is huge.
+    use std::collections::HashMap;
+
+    type Key = (u16, u16, u16, u16, u8);
+    const LOW_BITS: u32 = 3;
+    let mask = (1u64 << LOW_BITS) - 1;
+    let key_of = |st: &LinState| -> Key {
+        (
+            (st.u.as_limbs()[0] & mask) as u16,
+            (st.v.as_limbs()[0] & mask) as u16,
+            (st.r.as_limbs()[0] & mask) as u16,
+            (st.s.as_limbs()[0] & mask) as u16,
+            st.f,
+        )
+    };
+
+    let mut counts: HashMap<Key, [usize; 4]> = HashMap::new();
+    let idx = |br: Branch| -> usize { (br.a_swap as usize) * 2 + (br.add as usize) };
+
+    for seed in 1..=120u64 {
+        let mut st = LinState { u: SECP256K1_P, v: random_element(seed), r: U256::ZERO, s: random_element(seed + 10_000), f: 1 };
+        for _ in 0..ITERS {
+            let br = step_linear_canonical(&mut st);
+            let k = key_of(&st);
+            counts.entry(k).or_insert([0; 4])[idx(br)] += 1;
+        }
+    }
+
+    let mut table: HashMap<Key, usize> = HashMap::new();
+    for (k, c) in counts {
+        let mut best_i = 0usize;
+        let mut best_c = 0usize;
+        for (i, &v) in c.iter().enumerate() {
+            if v > best_c { best_c = v; best_i = i; }
+        }
+        table.insert(k, best_i);
+    }
+
+    let mut wrong = 0usize;
+    let mut total = 0usize;
+    for seed in 10_001..=10_120u64 {
+        let mut st = LinState { u: SECP256K1_P, v: random_element(seed), r: U256::ZERO, s: random_element(seed + 10_000), f: 1 };
+        for _ in 0..ITERS {
+            let br = step_linear_canonical(&mut st);
+            let k = key_of(&st);
+            // All 3-bit keys are present in the train set; fallback is arbitrary.
+            let pred = table.get(&k).copied().unwrap_or(0);
+            if pred != idx(br) { wrong += 1; }
+            total += 1;
+        }
+    }
+    let err_rate = wrong as f64 / total as f64;
+    assert!(err_rate > 0.50, "low-bit branch classifier unexpectedly good: err={err_rate}");
 }
 
 #[test]

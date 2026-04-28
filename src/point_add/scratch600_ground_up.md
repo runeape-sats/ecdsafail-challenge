@@ -361,15 +361,69 @@ coefficient registers. It is not the cheap 4-bit start-state formula.
 The follow-up test `zero_coefficient_seed_loses_branch_information` shows a
 critical exactness problem: if the coefficient seed is zero, then even full
 `(u,v,r,s,f)` has collisions because `r=s=0` carries no trajectory signal.
-An exact point-add cannot rely on `dy` being nonzero. Therefore a self-cleaning
-DIV needs either:
+Approximate tolerance makes this rare exceptional set acceptable in principle
+(`dy=0` is negligible for random points), but it is not the main obstacle.
 
-- a nonzero tag mixed into the coefficient state without destroying access to
-  `y/x`, or
-- a branch-recovery predicate that does not rely on the coefficient scalar, or
-- an acceptance of approximate failure on the rare `dy=0` subspace (not allowed
-  by the current exact harness unless the test distribution never hits it).
+The stronger follow-up test
+`low_bit_end_state_branch_classifier_is_not_approx_good_enough` trains the
+best majority lookup from the low 3 bits of `(u,v,r,s,f)` and tests it on
+disjoint samples. Error is >50%. So the needed end-state branch predicate is
+not a small low-bit heuristic. The branch information is globally present in
+full coefficient state, but extracting it cheaply appears hard.
 
+### Approximate-tolerant tag breakthrough: seed with `y+x`
+
+User clarified that **~1% total failure is tolerable**. This makes a tag viable,
+but the tag must not introduce an unremovable raw-`k` term. The right tag is the
+denominator itself:
+
+```text
+s0 = y + x
+T(x)*(0, y+x) = (k*y + k*x, 0) = (k*y - 2^ITERS, 0)
+```
+
+because `k*x = -2^ITERS` is a known constant. Therefore:
+
+```text
+k*y = r + 2^ITERS
+ y/x = -(r + 2^ITERS) / 2^ITERS
+```
+
+The only zero-tag exceptional set is `y=-x (mod p)`, which is negligible for
+random field inputs and fits the approximate-error model. Test
+`dx_tagged_seed_recovers_division_with_negligible_exception` verifies this on
+random samples.
+
+Circuit validation is also wired behind env var `KAL_TAGGED_DIV_VALIDATE=1`:
+
+- before pair1 Kaliski, set `ty := dy + dx`,
+- compute tagged slope `-(λ+1)`,
+- consume tagged `ty` to zero with the existing `pair1_mul2`,
+- add known constant `1` to recover the ordinary `-λ` used by the remaining
+  scaffold.
+
+This default-off integration passes the full 9024-shot harness and 5 alt seeds
+with:
+
+```text
+KAL_TAGGED_DIV_VALIDATE=1 cargo run --release -- --note tagged-div-validate
+avg_toffoli = 4,138,926
+qubits      = 2716
+classical/phase/ancilla failures = 0
+```
+
+It is intentionally a validation path, not an optimization: it adds ~6k Toffoli
+because it still uses the old Bennett-clean Kaliski and m_hist. Its importance
+is that the tag algebra works in the real circuit.
+
+Therefore a self-cleaning DIV now needs:
+
+- a **derived exact/near-exact predicate** over full `(u,v,r,s)` that is much
+  cheaper than storing `m_hist`, and can fail only on the negligible tag-zero
+  subspace; or
+- a different update convention whose inverse branch is local.
+
+Acceptance of a crude local classifier is not enough: >50% per-step blows up.
 This is the next hard synthesis problem.
 
 ## 11. Fast invalidation tasks still open
