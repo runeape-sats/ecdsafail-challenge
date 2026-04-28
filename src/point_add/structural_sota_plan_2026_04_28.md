@@ -406,12 +406,17 @@ Positive forward-row progress:
   the old sources, zeros the old rows using the noncanonical adjugate residual,
   uncomputes `m` from residual high bits, and uncomputes the residual. It
   simulates correctly on 32 random basis states at `20146 CCX`, peak `1898q`.
+- `signed_sample_fixed_matrix_replacement_cleans_old_rows` completes the same
+  replacement for the signed matrix `[[-8192,24576],[-3,1]]`. It computes
+  signed scaled rows, computes `m`, computes signed `q=s adj(P)m/2^16`, zeros
+  the old rows, clears `m` via `Pq=m`, clears `q` from residual high bits, and
+  uncomputes residuals. It passes 32 random basis states at `13110 CCX`, peak
+  `2256q`.
 
 This reopens BY as a live SOTA-shaped route but with precise remaining
-obstacles: signed/general matrix replacement and branch/matrix history
-compression. The next implementation target is to generalize the fixed-matrix
-replacement from the triangular positive matrix to arbitrary signed BY matrices;
-then attempt a BY tagged-DIV scaffold.
+obstacles: arbitrary-matrix replacement and branch/matrix history compression.
+The next implementation target is to run this fixed-matrix replacement over a
+broad sample of signed BY matrices and then assemble a BY tagged-DIV scaffold.
 
 ### Program B — triangular one-inversion schedule (highest payoff, highest risk)
 

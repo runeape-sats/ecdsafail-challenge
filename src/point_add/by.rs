@@ -2002,6 +2002,117 @@ mod tests {
         }
     }
 
+    fn add_signed_shifted_term_for_cost(
+        b: &mut super::super::B,
+        src: &[super::super::QubitId],
+        dst: &[super::super::QubitId],
+        shift: usize,
+        subtract: bool,
+    ) {
+        if shift >= dst.len() {
+            return;
+        }
+        let len = dst.len() - shift;
+        let addend = b.alloc_qubits(len);
+        let copy_len = src.len().min(len);
+        for i in 0..copy_len {
+            b.cx(src[i], addend[i]);
+        }
+        if !src.is_empty() {
+            let sign = src[src.len() - 1];
+            for i in copy_len..len {
+                b.cx(sign, addend[i]);
+            }
+        }
+        let dst_slice = dst[shift..shift + len].to_vec();
+        if subtract {
+            super::super::sub_nbit_qq_fast(b, &addend, &dst_slice);
+        } else {
+            super::super::add_nbit_qq_fast(b, &addend, &dst_slice);
+        }
+        if !src.is_empty() {
+            let sign = src[src.len() - 1];
+            for i in copy_len..len {
+                b.cx(sign, addend[i]);
+            }
+        }
+        for i in 0..copy_len {
+            b.cx(src[i], addend[i]);
+        }
+        b.free_vec(&addend);
+    }
+
+    fn add_signed_coeff_times_for_cost(
+        b: &mut super::super::B,
+        coeff: i128,
+        src: &[super::super::QubitId],
+        dst: &[super::super::QubitId],
+    ) {
+        let subtract = coeff < 0;
+        let mut mag = coeff.unsigned_abs();
+        let mut shift = 0usize;
+        while mag != 0 {
+            if (mag & 1) != 0 {
+                add_signed_shifted_term_for_cost(b, src, dst, shift, subtract);
+            }
+            mag >>= 1;
+            shift += 1;
+        }
+    }
+
+    fn arith_shift_right_inplace_for_cost(b: &mut super::super::B, v: &[super::super::QubitId], shift: usize) {
+        let n = v.len();
+        let sign = b.alloc_qubit();
+        b.cx(v[n - 1], sign);
+        for i in 0..(n - shift) {
+            b.swap(v[i], v[i + shift]);
+        }
+        for i in (n - shift)..n {
+            b.cx(sign, v[i]);
+        }
+        b.cx(v[n - 1], sign);
+        b.free(sign);
+    }
+
+    fn compute_signed_q_from_m_for_sample_matrix(
+        b: &mut super::super::B,
+        m0: &[super::super::QubitId],
+        m1: &[super::super::QubitId],
+    ) -> (Vec<super::super::QubitId>, Vec<super::super::QubitId>) {
+        let q0 = b.alloc_qubits(34);
+        let q1 = b.alloc_qubits(34);
+        add_coeff_times_for_cost(b, 1, m0, &q0);
+        add_coeff_times_for_cost(b, -24576, m1, &q0);
+        add_coeff_times_for_cost(b, 3, m0, &q1);
+        add_coeff_times_for_cost(b, -8192, m1, &q1);
+        arith_shift_right_inplace_for_cost(b, &q0, 16);
+        arith_shift_right_inplace_for_cost(b, &q1, 16);
+        (q0, q1)
+    }
+
+    fn subtract_signed_q_times_solinas_c_for_cost(
+        b: &mut super::super::B,
+        q: &[super::super::QubitId],
+        x: &[super::super::QubitId],
+    ) {
+        for &sh in &[0usize, 4, 6, 7, 8, 9, 32] {
+            add_signed_shifted_term_for_cost(b, q, x, sh, true);
+        }
+    }
+
+    fn clear_signed_q_from_z_high_for_cost(
+        b: &mut super::super::B,
+        q: &[super::super::QubitId],
+        z: &[super::super::QubitId],
+    ) {
+        for i in 18..q.len() {
+            b.cx(q[17], q[i]);
+        }
+        for i in 0..18 {
+            b.cx(z[256 + i], q[i]);
+        }
+    }
+
     fn emit_signed_row_scaled_from_sources_for_test(
         b: &mut super::super::B,
         coeff0: i128,
@@ -2235,6 +2346,120 @@ mod tests {
         let y0_low = y0[..256].to_vec();
         super::super::sub_nbit_qq_fast(b, &y0_low, x0);
         (m, z)
+    }
+
+    fn emit_signed_sample_old_cleanup_for_test(
+        b: &mut super::super::B,
+        x0: &[super::super::QubitId],
+        x1: &[super::super::QubitId],
+        y0: &[super::super::QubitId],
+        y1: &[super::super::QubitId],
+    ) -> (
+        Vec<super::super::QubitId>,
+        Vec<super::super::QubitId>,
+        Vec<super::super::QubitId>,
+        Vec<super::super::QubitId>,
+        Vec<super::super::QubitId>,
+        Vec<super::super::QubitId>,
+    ) {
+        // Matrix [[-8192,24576],[-3,1]], det=+2^16, adj=[[1,-24576],[3,-8192]].
+        let m0 = b.alloc_qubits(16);
+        let m1 = b.alloc_qubits(16);
+        compute_row_correction_m_from_sources(b, -8192, x0, 24576, x1, &m0, false);
+        compute_row_correction_m_from_sources(b, -3, x0, 1, x1, &m1, false);
+        let (q0, q1) = compute_signed_q_from_m_for_sample_matrix(b, &m0, &m1);
+        let z0 = b.alloc_qubits(274);
+        let z1 = b.alloc_qubits(274);
+        add_signed_coeff_times_for_cost(b, 1, y0, &z0);
+        add_signed_coeff_times_for_cost(b, -24576, y1, &z0);
+        add_signed_coeff_times_for_cost(b, 3, y0, &z1);
+        add_signed_coeff_times_for_cost(b, -8192, y1, &z1);
+
+        let z0_low = z0[..256].to_vec();
+        let z1_low = z1[..256].to_vec();
+        super::super::sub_nbit_qq_fast(b, &z0_low, x0);
+        super::super::sub_nbit_qq_fast(b, &z1_low, x1);
+        subtract_signed_q_times_solinas_c_for_cost(b, &q0, x0);
+        subtract_signed_q_times_solinas_c_for_cost(b, &q1, x1);
+
+        // Clear m using P*q = m (mod 2^16).
+        add_low_coeff_mod16_for_cost(b, (-8192i128).rem_euclid(1 << 16) as u64, &q0, &m0, true);
+        add_low_coeff_mod16_for_cost(b, 24576, &q1, &m0, true);
+        add_low_coeff_mod16_for_cost(b, (-3i128).rem_euclid(1 << 16) as u64, &q0, &m1, true);
+        add_low_coeff_mod16_for_cost(b, 1, &q1, &m1, true);
+
+        // Approximate q cleanup from high bits of z = x + p*q.
+        clear_signed_q_from_z_high_for_cost(b, &q0, &z0);
+        clear_signed_q_from_z_high_for_cost(b, &q1, &z1);
+
+        // Uncompute residuals from y.
+        add_signed_coeff_times_for_cost(b, -1, y0, &z0);
+        add_signed_coeff_times_for_cost(b, 24576, y1, &z0);
+        add_signed_coeff_times_for_cost(b, -3, y0, &z1);
+        add_signed_coeff_times_for_cost(b, 8192, y1, &z1);
+        (m0, m1, q0, q1, z0, z1)
+    }
+
+    #[test]
+    fn signed_sample_fixed_matrix_replacement_cleans_old_rows() {
+        const WIDTH: usize = 274;
+        let mtx = jump_matrix_direct_lowword(16, 16, 1, 1, 3).3;
+        assert_eq!((mtx.m00, mtx.m01, mtx.m10, mtx.m11), (-8192, 24576, -3, 1));
+        let mut b = super::super::B::new();
+        let x0 = b.alloc_qubits(256);
+        let x1 = b.alloc_qubits(256);
+        let y0 = b.alloc_qubits(WIDTH);
+        let y1 = b.alloc_qubits(WIDTH);
+        emit_signed_row_scaled_from_sources_for_test(&mut b, mtx.m00, &x0, mtx.m01, &x1, &y0);
+        emit_signed_row_scaled_from_sources_for_test(&mut b, mtx.m10, &x0, mtx.m11, &x1, &y1);
+        let (m0, m1, q0, q1, z0, z1) = emit_signed_sample_old_cleanup_for_test(&mut b, &x0, &x1, &y0, &y1);
+        let ccx = count_ccx(&b.ops);
+        let peak = b.peak_qubits;
+        let num_qubits = b.next_qubit as usize;
+        let num_bits = b.next_bit as usize;
+        let ops = b.ops;
+        let width_mod = U512::from(1u64) << WIDTH;
+        let width_mask = width_mod - U512::from(1u64);
+        let p512 = u256_to_u512_for_by_tests(SECP256K1_P);
+        let pinv = 51_919u64;
+        let low_mask = (1u64 << 16) - 1;
+        let mut sx = Sampler::new(b"by-signed-repl-x0-v1", SECP256K1_P);
+        let mut sy = Sampler::new(b"by-signed-repl-x1-v1", SECP256K1_P);
+        for _ in 0..32 {
+            let a = sx.next();
+            let c = sy.next();
+            let x0w = u256_to_u512_for_by_tests(a);
+            let x1w = u256_to_u512_for_by_tests(c);
+            let expected_row = |c0: i128, c1: i128| -> U512 {
+                let t = (x0w * signed_coeff_mod_width_for_test(c0, WIDTH)
+                    + x1w * signed_coeff_mod_width_for_test(c1, WIDTH)) & width_mask;
+                let corr = (t.as_limbs()[0] & low_mask).wrapping_mul((!pinv).wrapping_add(1)) & low_mask;
+                let v = (t + U512::from(corr) * p512) & width_mask;
+                arith_shift_right_mod_width_for_test(v, WIDTH, 16)
+            };
+            let exp0 = expected_row(mtx.m00, mtx.m01);
+            let exp1 = expected_row(mtx.m10, mtx.m11);
+            let mut hasher = sha3::Shake128::default();
+            hasher.update(b"by-signed-repl-sim-v1");
+            let mut xof = hasher.finalize_xof();
+            let mut sim = crate::sim::Simulator::new(num_qubits, num_bits, &mut xof);
+            set_slice_u512_by(&mut sim, &x0, x0w);
+            set_slice_u512_by(&mut sim, &x1, x1w);
+            sim.apply(&ops);
+            assert_eq!(get_slice_u512_by(&sim, &x0), U512::ZERO, "x0 not zero");
+            assert_eq!(get_slice_u512_by(&sim, &x1), U512::ZERO, "x1 not zero");
+            assert_eq!(get_slice_u512_by(&sim, &m0), U512::ZERO, "m0 not zero");
+            assert_eq!(get_slice_u512_by(&sim, &m1), U512::ZERO, "m1 not zero");
+            assert_eq!(get_slice_u512_by(&sim, &q0), U512::ZERO, "q0 not zero");
+            assert_eq!(get_slice_u512_by(&sim, &q1), U512::ZERO, "q1 not zero");
+            assert_eq!(get_slice_u512_by(&sim, &z0), U512::ZERO, "z0 not zero");
+            assert_eq!(get_slice_u512_by(&sim, &z1), U512::ZERO, "z1 not zero");
+            assert_eq!(get_slice_u512_by(&sim, &y0), exp0, "y0 mismatch");
+            assert_eq!(get_slice_u512_by(&sim, &y1), exp1, "y1 mismatch");
+        }
+        eprintln!("signed sample BY fixed-matrix replacement: ccx={ccx}, peak={peak}q");
+        assert!(ccx < 45_000, "signed fixed-matrix replacement too costly");
+        assert!(peak < 2_700, "signed fixed-matrix replacement peak too high");
     }
 
     #[test]
