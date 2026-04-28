@@ -2513,6 +2513,69 @@ mod tests {
     }
 
     #[test]
+    fn branch_pattern_entropy_supports_compressed_history_target() {
+        // Raw branch history is 560 bits. Encoding each 16-step window as a
+        // branch pattern gives a concrete compression target that is closer to
+        // a reversible implementation than matrix IDs: the pattern itself is
+        // the control microprogram for scaled replay.
+        use std::collections::HashMap;
+        const W: usize = 16;
+        const WINDOWS: usize = 35;
+        let samples = 10_000usize;
+        let mut sampler = Sampler::new(b"by-branch-pattern-entropy-v1", SECP256K1_P);
+        let mut seqs: Vec<Vec<u16>> = Vec::with_capacity(samples);
+        let mut counts: Vec<HashMap<u16, usize>> = (0..WINDOWS).map(|_| HashMap::new()).collect();
+        for _ in 0..samples {
+            let x = sampler.next();
+            let mut delta = 1i64;
+            let mut f = SInt::from_u(SECP256K1_P);
+            let mut g = SInt::from_u(x);
+            let mut seq = Vec::with_capacity(WINDOWS);
+            for j in 0..WINDOWS {
+                let mut pat = 0u16;
+                for i in 0..W {
+                    if g.bit0() {
+                        pat |= 1u16 << i;
+                    }
+                    divstep_sint_state(&mut delta, &mut f, &mut g);
+                }
+                *counts[j].entry(pat).or_insert(0) += 1;
+                seq.push(pat);
+            }
+            seqs.push(seq);
+        }
+        let mut entropy_sum = 0.0f64;
+        let mut fixed_bits = 0usize;
+        for c in &counts {
+            fixed_bits += ((c.len() + 1) as f64).log2().ceil() as usize;
+            for &n in c.values() {
+                let p = n as f64 / samples as f64;
+                entropy_sum -= p * p.log2();
+            }
+        }
+        let mut code_lengths = Vec::with_capacity(samples);
+        for seq in &seqs {
+            let mut len = 0.0f64;
+            for (j, &pat) in seq.iter().enumerate() {
+                let n = *counts[j].get(&pat).unwrap();
+                let p = n as f64 / samples as f64;
+                len -= p.log2();
+            }
+            code_lengths.push(len);
+        }
+        code_lengths.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let p99 = code_lengths[samples * 99 / 100];
+        let p999 = code_lengths[samples * 999 / 1000];
+        let fail_520 = code_lengths.iter().filter(|&&l| l > 520.0).count() as f64 / samples as f64;
+        eprintln!(
+            "BY branch-pattern entropy: H≈{entropy_sum:.1} bits, p99≈{p99:.1}, p999≈{p999:.1}, fail>520≈{fail_520:.4}, fixed_distinct_bits={fixed_bits}"
+        );
+        assert!(entropy_sum < 500.0, "branch-pattern entropy too high for compressed history");
+        assert!(p99 < 510.0, "branch-pattern p99 too high for 600-scratch target");
+        assert!(fixed_bits < 560, "fixed per-window pattern IDs do not compress raw history");
+    }
+
+    #[test]
     fn actual_matrix_sequence_entropy_supports_sub600_history_target() {
         // Storing raw 22-bit (delta,h) keys costs 770 bits for 35 windows, but
         // actual secp256k1 trajectories are highly non-uniform, especially near

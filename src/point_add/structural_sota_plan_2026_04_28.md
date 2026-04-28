@@ -610,6 +610,25 @@ controlled-neg zero representative need production handling. But algebraically
 it closes the previous 2.72M selected-replay blocker without QROM or block
 SELECT.
 
+`branch_pattern_entropy_supports_compressed_history_target` then checks the
+history format needed by this scaled microprogram directly. Instead of storing
+raw 560 branch bits or matrix IDs, encode each 16-step window as its branch
+pattern. On 10k secp256k1 trajectories:
+
+```text
+entropy ≈ 440.2 bits
+p99 code length ≈ 458.5 bits
+p999 code length ≈ 462.1 bits
+fixed per-window distinct-pattern IDs = 481 bits
+fail > 520 bits = 0
+```
+
+So the branch microprogram itself has a sub-500-bit empirical representation.
+Combined with a no-clean-temp / dirty-workspace controlled modular add, this is
+the concrete scratch path: the arithmetic should use the history bank as dirty
+workspace or avoid the 256-bit AND addend, so peak scratch is history-dominated
+rather than `history + adder-temp`.
+
 This reopens BY as a live SOTA-shaped route but with precise remaining
 obstacles: branch/matrix history compression, selected Hermite-factor
 application, and integration into a 35-window BY tagged-DIV scaffold. The
