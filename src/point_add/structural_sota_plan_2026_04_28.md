@@ -693,9 +693,30 @@ exact 560-step replay       ≈ 2,436,000 CCX
 ```
 
 So the obvious exact/phase-safe replay would restore window-local control
-clearing but lose the SOTA Toffoli shape. A production replay therefore needs
-either (a) keep A controls live until the end, or (b) a more surgical phase-fix
-for early A clearing, ideally inside the self-cleaning denominator/window design.
+clearing but lose the SOTA Toffoli shape. A more surgical phase lead now exists:
+`live_reduction_flag_microstep_hits_replay_target_but_needs_cleanup` keeps the
+modular-add reduction flag live instead of immediately uncomputing it with the
+MBU comparator:
+
+```text
+live-reduction-flag microstep = 1,790 CCX
+560-step replay body          ≈ 1,002,400 CCX
+```
+
+`live_reduction_flags_make_window_local_a_clear_phase_safe_candidate` then wraps
+this in the window-local A decoder schedule. It is data-correct and phase-clean
+while clearing each 16-bit A window immediately:
+
+```text
+live flags + window-local A clear: 1,126,720 CCX, peak 2,780q, phase=0
+```
+
+The remaining garbage is 560 modular-add reduction flags. This is now the
+sharp replay moonshot: find a way to clean/absorb those flags (possibly during
+reverse denominator/window cleanup) without paying the full `cmp_lt` uncompute.
+A production replay therefore needs either (a) keep A controls/live flags until
+the end and clean them globally, or (b) fuse the modular average so the same
+flag is recoverable from later state.
 `clean_two_replay_by_budget_requires_replay_or_phase_breakthrough` updates the
 whole-point economics with the clean decoder:
 

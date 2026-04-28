@@ -3880,6 +3880,72 @@ mod tests {
         super::super::mod_halve_inplace_fast(b, s, p);
     }
 
+    fn mod_add_qq_fast_keep_reduction_flag_for_test(
+        b: &mut super::super::B,
+        acc: &[super::super::QubitId],
+        a: &[super::super::QubitId],
+        p: U256,
+        reduction_flag: super::super::QubitId,
+    ) {
+        // Same forward modular addition as mod_add_qq_fast, but keep the
+        // reduction flag live instead of paying cmp_lt_into_fast to uncompute
+        // it immediately. This is not a complete primitive; it quantifies the
+        // exact flag-cleaning obstacle for a fused modular average.
+        let n = acc.len();
+        assert_eq!(n, a.len());
+        let (acc_ext, acc_ovf) = super::super::ext_reg(b, acc);
+        let (a_ext, a_ovf) = super::super::ext_reg(b, a);
+        super::super::add_nbit_qq_fast(b, &a_ext, &acc_ext);
+        let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1u64));
+        super::super::add_nbit_const_fast(b, &acc_ext, c);
+        b.cx(acc_ovf, reduction_flag);
+        b.x(reduction_flag);
+        super::super::csub_nbit_const_fast(b, &acc_ext, c, reduction_flag);
+        b.x(reduction_flag);
+        b.cx(reduction_flag, acc_ovf);
+        super::super::unext_reg(b, a_ovf);
+        super::super::unext_reg(b, acc_ovf);
+        let _ = (acc_ext, a_ext);
+    }
+
+    fn cmod_add_qq_keep_reduction_flag_for_test(
+        b: &mut super::super::B,
+        acc: &[super::super::QubitId],
+        a: &[super::super::QubitId],
+        ctrl: super::super::QubitId,
+        p: U256,
+        reduction_flag: super::super::QubitId,
+    ) {
+        let f = b.alloc_qubits(acc.len());
+        for i in 0..acc.len() {
+            b.ccx(ctrl, a[i], f[i]);
+        }
+        mod_add_qq_fast_keep_reduction_flag_for_test(b, acc, &f, p, reduction_flag);
+        for i in 0..acc.len() {
+            let m = b.alloc_bit();
+            b.hmr(f[i], m);
+            b.cz_if(ctrl, a[i], m);
+        }
+        b.free_vec(&f);
+    }
+
+    fn emit_scaled_by_controlled_microstep_live_addflag_for_test(
+        b: &mut super::super::B,
+        r: &[super::super::QubitId],
+        s: &[super::super::QubitId],
+        odd_ctrl: super::super::QubitId,
+        a_ctrl: super::super::QubitId,
+        reduction_flag: super::super::QubitId,
+        p: U256,
+    ) {
+        for i in 0..r.len() {
+            super::super::cswap(b, a_ctrl, r[i], s[i]);
+        }
+        emit_cmod_neg_for_test(b, s, a_ctrl, p);
+        cmod_add_qq_keep_reduction_flag_for_test(b, s, r, odd_ctrl, p, reduction_flag);
+        super::super::mod_halve_inplace_fast(b, s, p);
+    }
+
     fn emit_scaled_by_controlled_microstep_for_test(
         b: &mut super::super::B,
         r: &[super::super::QubitId],
@@ -5114,6 +5180,121 @@ mod tests {
     }
 
     #[test]
+    fn live_reduction_flags_make_window_local_a_clear_phase_safe_candidate() {
+        // Keep the modular-add reduction flags live instead of immediately
+        // uncomputing them with measurement-based cmp_lt. This tests whether
+        // those flags are the phase dependency that made early A-clearing fail.
+        // The flags are deliberate garbage here; the next problem is a cheap
+        // way to clean or absorb them.
+        let p = SECP256K1_P;
+        let inv2 = (p.wrapping_add(U256::from(1u64))) >> 1usize;
+        let mut sx = Sampler::new(b"by-live-flags-window-local-x-v1", p);
+        let mut sy = Sampler::new(b"by-live-flags-window-local-y-v1", p);
+        let (x, y, controls, boundary_delta, exp_r, exp_s, f_final) = loop {
+            let x = sx.next();
+            let y = sy.next();
+            let mut delta = 1i64;
+            let mut f = SInt::from_u(p);
+            let mut g = SInt::from_u(x);
+            let mut r_exp = U256::ZERO;
+            let mut s_exp = addm(y, x, p);
+            let mut controls = Vec::with_capacity(560);
+            let mut boundary_delta = Vec::with_capacity(35);
+            for step in 0..560 {
+                if step % 16 == 0 { boundary_delta.push(delta); }
+                let odd = g.bit0();
+                let a = delta > 0 && odd;
+                controls.push((odd, a));
+                if a {
+                    let nr = s_exp;
+                    let ns = mulm(subm(s_exp, r_exp, p), inv2, p);
+                    r_exp = nr;
+                    s_exp = ns;
+                } else if odd {
+                    s_exp = mulm(addm(s_exp, r_exp, p), inv2, p);
+                } else {
+                    s_exp = mulm(s_exp, inv2, p);
+                }
+                divstep_sint_state(&mut delta, &mut f, &mut g);
+            }
+            if g.is_zero() && (f.is_one_pos() || f.is_one_neg()) {
+                break (x, y, controls, boundary_delta, r_exp, s_exp, f);
+            }
+        };
+
+        let mut b = super::super::B::new();
+        let pattern = b.alloc_qubits(560);
+        let red_flags = b.alloc_qubits(560);
+        let delta_starts: Vec<Vec<super::super::QubitId>> = (0..35).map(|_| b.alloc_qubits(10)).collect();
+        let delta_work = b.alloc_qubits(10);
+        let a_window = b.alloc_qubits(16);
+        let r = b.alloc_qubits(256);
+        let s = b.alloc_qubits(256);
+        for win in 0..35 {
+            for i in 0..10 { b.cx(delta_starts[win][i], delta_work[i]); }
+            emit_pattern_delta_decode_window_for_test(
+                &mut b,
+                &pattern[win * 16..win * 16 + 16],
+                &delta_work,
+                &a_window,
+            );
+            for i in 0..16 {
+                let step = win * 16 + i;
+                emit_scaled_by_controlled_microstep_live_addflag_for_test(
+                    &mut b,
+                    &r,
+                    &s,
+                    pattern[step],
+                    a_window[i],
+                    red_flags[step],
+                    p,
+                );
+            }
+            emit_pattern_delta_decode_window_reverse_for_test(
+                &mut b,
+                &pattern[win * 16..win * 16 + 16],
+                &delta_work,
+                &a_window,
+            );
+            for i in 0..10 { b.cx(delta_starts[win][i], delta_work[i]); }
+        }
+        let ccx = count_ccx(&b.ops);
+        let peak = b.peak_qubits;
+        let num_qubits = b.next_qubit as usize;
+        let num_bits = b.next_bit as usize;
+        let ops = b.ops;
+        let mut hasher = sha3::Shake128::default();
+        hasher.update(b"by-live-flags-window-local-sim-v1");
+        let mut xof = hasher.finalize_xof();
+        let mut sim = crate::sim::Simulator::new(num_qubits, num_bits, &mut xof);
+        for (i, &(odd_v, _)) in controls.iter().enumerate() {
+            if odd_v { *sim.qubit_mut(pattern[i]) |= 1; }
+        }
+        for (win, &d) in boundary_delta.iter().enumerate() {
+            set_slice_u512_by(&mut sim, &delta_starts[win], twos_u512_for_delta(d, 10));
+        }
+        set_slice_u512_by(&mut sim, &r, U512::ZERO);
+        set_slice_u512_by(&mut sim, &s, u256_to_u512_for_by_tests(addm(y, x, p)));
+        sim.apply(&ops);
+        assert_eq!(get_slice_u512_by(&sim, &r), u256_to_u512_for_by_tests(exp_r), "r mismatch");
+        assert_eq!(get_slice_u512_by(&sim, &s), u256_to_u512_for_by_tests(exp_s), "s mismatch");
+        let plus_one = if f_final.is_one_pos() { exp_r } else { negm(exp_r, p) };
+        let quotient = subm(plus_one, U256::from(1u64), p);
+        assert_eq!(quotient, mulm(y, fermat_modinv(x, p), p), "tagged quotient mismatch");
+        assert_eq!(get_slice_u512_by(&sim, &a_window), U512::ZERO, "A window scratch not clean");
+        assert_eq!(get_slice_u512_by(&sim, &delta_work), U512::ZERO, "delta work not clean");
+        let red_nonzero = red_flags.iter().any(|&q| (sim.qubit(q) & 1) != 0);
+        let phase = sim.global_phase() & 1;
+        eprintln!(
+            "BY live reduction flags + window-local A clear: ccx={ccx}, peak={peak}q, phase={phase}, flags_nonzero={red_nonzero}"
+        );
+        assert!(red_nonzero, "live reduction flags unexpectedly clean already");
+        assert_eq!(phase, 0, "live reduction flags did not fix early A-clear phase");
+        assert!(ccx < 1_140_000, "live-flag window-local replay lost target Toffoli band");
+        assert!(peak < 2_850, "live-flag window-local replay exceeds current cap");
+    }
+
+    #[test]
     fn scaled_by_pattern_decoder_560_tagged_div_scaffold_is_clean() {
         // Clean version of the raw-pattern scaffold: expand 560 odd-pattern
         // bits into A controls using the reversible pattern+delta decoder,
@@ -5462,6 +5643,59 @@ mod tests {
         );
         assert!(ccx < 35_000, "scaled controlled window too costly");
         assert!(peak < 1_350, "scaled controlled window peak too high");
+    }
+
+    #[test]
+    fn live_reduction_flag_microstep_hits_replay_target_but_needs_cleanup() {
+        let p = SECP256K1_P;
+        let mut b = super::super::B::new();
+        let odd = b.alloc_qubit();
+        let a_ctrl = b.alloc_qubit();
+        let red_flag = b.alloc_qubit();
+        let r = b.alloc_qubits(256);
+        let s = b.alloc_qubits(256);
+        emit_scaled_by_controlled_microstep_live_addflag_for_test(&mut b, &r, &s, odd, a_ctrl, red_flag, p);
+        let ccx = count_ccx(&b.ops);
+        let peak = b.peak_qubits;
+        let num_qubits = b.next_qubit as usize;
+        let num_bits = b.next_bit as usize;
+        let ops = b.ops;
+        let inv2 = (p.wrapping_add(U256::from(1u64))) >> 1usize;
+        let cases = [(false, false, "C"), (true, false, "B"), (true, true, "A")];
+        let mut sx = Sampler::new(b"by-live-flag-step-r-v1", p);
+        let mut sy = Sampler::new(b"by-live-flag-step-s-v1", p);
+        let mut saw_flag = false;
+        for &(odd_v, a_v, name) in &cases {
+            for _ in 0..12 {
+                let rv = sx.next();
+                let sv = sy.next();
+                let (exp_r, exp_s) = match name {
+                    "A" => (sv, mulm(subm(sv, rv, p), inv2, p)),
+                    "B" => (rv, mulm(addm(sv, rv, p), inv2, p)),
+                    "C" => (rv, mulm(sv, inv2, p)),
+                    _ => unreachable!(),
+                };
+                let mut hasher = sha3::Shake128::default();
+                hasher.update(b"by-live-flag-step-sim-v1");
+                let mut xof = hasher.finalize_xof();
+                let mut sim = crate::sim::Simulator::new(num_qubits, num_bits, &mut xof);
+                if odd_v { *sim.qubit_mut(odd) |= 1; }
+                if a_v { *sim.qubit_mut(a_ctrl) |= 1; }
+                set_slice_u512_by(&mut sim, &r, u256_to_u512_for_by_tests(rv));
+                set_slice_u512_by(&mut sim, &s, u256_to_u512_for_by_tests(sv));
+                sim.apply(&ops);
+                assert_eq!(get_slice_u512_by(&sim, &r), u256_to_u512_for_by_tests(exp_r), "r mismatch {name}");
+                assert_eq!(get_slice_u512_by(&sim, &s), u256_to_u512_for_by_tests(exp_s), "s mismatch {name}");
+                saw_flag |= (sim.qubit(red_flag) & 1) != 0;
+            }
+        }
+        let replay560 = ccx * 560;
+        eprintln!(
+            "BY live-reduction-flag microstep: ccx={ccx}, replay560≈{replay560}, peak={peak}q"
+        );
+        assert!(saw_flag, "reduction flag never set in samples; test is not exercising live garbage");
+        assert!(ccx < 1_850, "live-flag microstep does not recover replay margin");
+        assert!(replay560 < 1_040_000, "live-flag replay not near target band");
     }
 
     #[test]
