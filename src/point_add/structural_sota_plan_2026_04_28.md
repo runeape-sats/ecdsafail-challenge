@@ -541,10 +541,22 @@ naive A-position list p99 ≈ 1540 bits
 ```
 
 So A-cases are not a rare payload; a simple A-position correction list is worse
-than raw branch history. Needed ideas narrow to a genuinely cheaper signed
-add/sub mux, a blockwise specialization that amortizes controls without listing
-all A positions, or a reversible history scheme that turns branch bits into
-low-cost fixed-control blocks without huge QROM.
+than raw branch history. `selected_replay_budget_requires_more_than_a_signed_mux`
+then quantifies the remaining target using measured primitives:
+
+```text
+cmod_add = 1280 CCX, mod_add = 1024, double = halve = 255
+naive generic controls        ≈ 2.72M
+ideal signed mux + static A   ≈ 1.86M
+ideal signed mux + value-A LB ≈ 1.28M
+fixed-control lower bound     ≈ 0.80M
+```
+
+Thus a signed add/sub mux alone is insufficient if the A-only update is still
+paid at all 560 possible positions. A SOTA-grade selected replay needs either
+value-proportional/block-specialized A handling near the 1.28M lower bound or a
+completely different fixed-control-block mechanism. The target is now numeric:
+close the `1.28M -> 0.80M` gap without exceeding ~600 scratch.
 
 This reopens BY as a live SOTA-shaped route but with precise remaining
 obstacles: branch/matrix history compression, selected Hermite-factor

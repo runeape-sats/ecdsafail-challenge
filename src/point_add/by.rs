@@ -3222,6 +3222,45 @@ mod tests {
     }
 
     #[test]
+    fn selected_replay_budget_requires_more_than_a_signed_mux() {
+        // Quantify the remaining gap after the obvious primitive improvement.
+        // A signed add/sub mux can combine the A-first (s-=r) and B-first
+        // (s+=r) updates into one controlled modular operation per divstep.
+        // But the extra A-only r+=s update is too common to pay at every step,
+        // and not sparse enough for a naive position list. This budget tells us
+        // what a real block-specialization scheme must beat.
+        let p = SECP256K1_P;
+        let mut b = super::super::B::new();
+        let ctrl = b.alloc_qubit();
+        let r = b.alloc_qubits(256);
+        let s = b.alloc_qubits(256);
+        let start = b.ops.len();
+        super::super::cmod_add_qq(&mut b, &s, &r, ctrl, p);
+        let cmod_add = count_ccx(&b.ops[start..]);
+        let start = b.ops.len();
+        super::super::mod_add_qq_fast(&mut b, &s, &r, p);
+        let mod_add = count_ccx(&b.ops[start..]);
+        let start = b.ops.len();
+        super::super::mod_double_inplace_fast(&mut b, &r, p);
+        let dbl = count_ccx(&b.ops[start..]);
+        let start = b.ops.len();
+        super::super::mod_halve_inplace_fast(&mut b, &r, p);
+        let halve = count_ccx(&b.ops[start..]);
+
+        let steps = 560.0;
+        let scale_halves = 2.0 * steps * halve as f64;
+        let ideal_signed_mux_static_a = steps * (2.0 * cmod_add as f64 + dbl as f64) + scale_halves;
+        let mean_a = 133.5; // measured by actual_branch_cases_are_not_sparse_enough_for_a_correction_list.
+        let signed_mux_with_value_proportional_a =
+            steps * (cmod_add as f64 + dbl as f64) + mean_a * mod_add as f64 + scale_halves;
+        eprintln!(
+            "BY selected replay budget targets: cmod_add={cmod_add}, mod_add={mod_add}, dbl={dbl}, halve={halve}, signed_mux_static_A≈{ideal_signed_mux_static_a:.0}, signed_mux_value_A_lb≈{signed_mux_with_value_proportional_a:.0}"
+        );
+        assert!(ideal_signed_mux_static_a > 1_700_000.0, "static A mux would already be enough; revisit selected replay");
+        assert!(signed_mux_with_value_proportional_a < 1_500_000.0, "even value-proportional A corrections are too costly");
+    }
+
+    #[test]
     fn actual_branch_cases_are_not_sparse_enough_for_a_correction_list() {
         // Check a tempting escape hatch: handle the odd add/sub stream with a
         // single signed mux per divstep, then encode the extra A-only r+=s
