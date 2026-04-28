@@ -3674,6 +3674,21 @@ mod tests {
         b.cx(g[0], odd_hist);
     }
 
+    fn emit_2adic_denominator_step_with_controls_for_test(
+        b: &mut super::super::B,
+        f: &[super::super::QubitId],
+        g: &[super::super::QubitId],
+        odd: super::super::QubitId,
+        a: super::super::QubitId,
+    ) {
+        for i in 0..f.len() {
+            super::super::cswap(b, a, f[i], g[i]);
+        }
+        emit_twos_complement_cneg_for_test(b, g, a);
+        super::super::cucc_add_ctrl(b, f, g, odd);
+        emit_logical_shift_right_even_for_test(b, g);
+    }
+
     fn emit_2adic_by_branch_step_for_test(
         b: &mut super::super::B,
         f: &[super::super::QubitId],
@@ -4013,6 +4028,104 @@ mod tests {
             "2-adic BY branch generator small prefix: steps={STEPS}, width={W}, ccx={ccx}, peak={}q",
             b.peak_qubits
         );
+    }
+
+    #[test]
+    fn full_width_denominator_microstep_window_replay_is_not_enough() {
+        // Given branch controls, the full denominator can be updated by the
+        // same swap/neg/add/halve skeleton as the lowword generator. Measure a
+        // 16-step window at the real signed width. This is the straightforward
+        // self-cleaning denominator body; it is useful as a target, but too
+        // expensive compared with the fixed-matrix/window replacement lower
+        // bounds (~8k/window).
+        const W: usize = 16;
+        const WIDTH: usize = 274;
+        let mut b = super::super::B::new();
+        let f = b.alloc_qubits(WIDTH);
+        let g = b.alloc_qubits(WIDTH);
+        let odd = b.alloc_qubits(W);
+        let a = b.alloc_qubits(W);
+        let start = b.ops.len();
+        for i in 0..W {
+            emit_2adic_denominator_step_with_controls_for_test(&mut b, &f, &g, odd[i], a[i]);
+        }
+        let window_ccx = count_ccx(&b.ops[start..]);
+        let compute_35 = window_ccx as f64 * 35.0;
+        let compute_uncompute = compute_35 * 2.0;
+        eprintln!(
+            "BY full-width denominator controlled microstep window: window_ccx={window_ccx}, compute35≈{compute_35:.0}, compute_uncompute≈{compute_uncompute:.0}, peak={}q",
+            b.peak_qubits
+        );
+        assert!(window_ccx > 20_000, "full-width denominator replay unexpectedly beats fixed-window target");
+        assert!(compute_uncompute > 1_500_000.0, "direct denominator replay might be SOTA-shaped; revisit");
+    }
+
+    #[test]
+    fn lowword_pattern_oracle_is_cheap_and_clean() {
+        // Window-level branch generation component: copy only the low 16 bits
+        // of f,g into a scratch 2-adic simulator, run 16 BY steps to produce
+        // the odd-pattern, CNOT the pattern to persistent history, then reverse
+        // the simulator and clear its local A/pattern scratch. This is the
+        // right oracle shape for a windowed DIV. It does not update the full
+        // denominator; that selected/window update remains the hard part.
+        const W: usize = 16;
+        const DBITS: usize = 10;
+        let mut b = super::super::B::new();
+        let f = b.alloc_qubits(W);
+        let g = b.alloc_qubits(W);
+        let delta = b.alloc_qubits(DBITS);
+        let pattern_tmp = b.alloc_qubits(W);
+        let a_tmp = b.alloc_qubits(W);
+        let pattern_hist = b.alloc_qubits(W);
+        for i in 0..W {
+            emit_2adic_by_branch_step_for_test(&mut b, &f, &g, &delta, pattern_tmp[i], a_tmp[i]);
+        }
+        for i in 0..W {
+            b.cx(pattern_tmp[i], pattern_hist[i]);
+        }
+        for i in (0..W).rev() {
+            emit_2adic_by_branch_step_reverse_for_test(&mut b, &f, &g, &delta, pattern_tmp[i], a_tmp[i]);
+        }
+        let ccx = count_ccx(&b.ops);
+        let peak = b.peak_qubits;
+        let num_qubits = b.next_qubit as usize;
+        let num_bits = b.next_bit as usize;
+        let ops = b.ops;
+        let cases = [
+            (1u64, 3u64, 1i64),
+            (0xffffu64, 0x1234u64, -5i64),
+            (0x9d31u64 | 1, 0xbeefu64, 17i64),
+            (0x8001u64, 0x7fffu64, 0i64),
+        ];
+        for &(f0, g0, d0) in &cases {
+            let bits = branch_bits_for_lowword_window(W, d0, f0 as i128, g0 as i128);
+            let mut exp_pat = 0u16;
+            for (i, bit) in bits.iter().enumerate() {
+                if *bit {
+                    exp_pat |= 1u16 << i;
+                }
+            }
+            let mut hasher = sha3::Shake128::default();
+            hasher.update(b"by-lowword-pattern-oracle-v1");
+            let mut xof = hasher.finalize_xof();
+            let mut sim = crate::sim::Simulator::new(num_qubits, num_bits, &mut xof);
+            set_slice_u512_by(&mut sim, &f, U512::from(f0));
+            set_slice_u512_by(&mut sim, &g, U512::from(g0));
+            set_slice_u512_by(&mut sim, &delta, twos_u512_for_delta(d0, DBITS));
+            sim.apply(&ops);
+            assert_eq!(get_slice_u512_by(&sim, &f), U512::from(f0), "f changed");
+            assert_eq!(get_slice_u512_by(&sim, &g), U512::from(g0), "g changed");
+            assert_eq!(get_slice_u512_by(&sim, &delta), twos_u512_for_delta(d0, DBITS), "delta changed");
+            assert_eq!(get_slice_u512_by(&sim, &pattern_tmp), U512::ZERO, "pattern tmp dirty");
+            assert_eq!(get_slice_u512_by(&sim, &a_tmp), U512::ZERO, "A tmp dirty");
+            assert_eq!(get_slice_u512_by(&sim, &pattern_hist), U512::from(exp_pat), "pattern mismatch");
+            assert_eq!(sim.global_phase() & 1, 0, "phase garbage");
+        }
+        eprintln!(
+            "BY lowword 16-step pattern oracle: ccx={ccx}, peak={peak}q"
+        );
+        assert!(ccx < 25_000, "lowword pattern oracle too expensive for windowed DIV");
+        assert!(peak < 150, "lowword pattern oracle unexpectedly wide");
     }
 
     #[test]
