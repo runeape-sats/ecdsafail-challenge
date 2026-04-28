@@ -629,6 +629,22 @@ the concrete scratch path: the arithmetic should use the history bank as dirty
 workspace or avoid the 256-bit AND addend, so peak scratch is history-dominated
 rather than `history + adder-temp`.
 
+The first whole-point budget with this primitive is now explicit in
+`scaled_by_div_point_add_budget_has_sota_margin_if_history_workspace_solved`:
+
+```text
+current total                   = 4,132,750
+remove two Kaliski invocations  ≈ -3,190,000
+keep non-inversion scaffold     ≈    942,750
+scaled BY DIV (2046*560)        ≈  1,145,760
+branch/decode margin            ≈    150,000
+projected point-add             ≈  2,238,510
+```
+
+That is below the 2.7M Google low-qubit target and close to the 2.1M low-gate
+target. The remaining work is implementation risk, not arithmetic economics:
+complete tagged-DIV integration and solve the scratch overlap/decoder.
+
 This reopens BY as a live SOTA-shaped route but with precise remaining
 obstacles: branch/matrix history compression, selected Hermite-factor
 application, and integration into a 35-window BY tagged-DIV scaffold. The

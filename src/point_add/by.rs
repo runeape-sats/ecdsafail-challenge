@@ -2513,6 +2513,26 @@ mod tests {
     }
 
     #[test]
+    fn scaled_by_div_point_add_budget_has_sota_margin_if_history_workspace_solved() {
+        // The structural point of the scaled controlled microstep is that it
+        // replaces both Kaliski invocations by one in-place tagged DIV. This is
+        // a budget model, not an implementation: it assumes the remaining
+        // branch-history/workspace problem is solved without changing the
+        // measured 2046-CCX microstep arithmetic.
+        let current_total = 4_132_750.0;
+        let current_two_kaliski = 3_190_000.0; // measured ~1.60M + ~1.59M from point-add decomposition.
+        let non_inv_scaffold = current_total - current_two_kaliski;
+        let scaled_by_div = 2_046.0 * 560.0;
+        let branch_decode_margin = 150_000.0;
+        let projected = non_inv_scaffold + scaled_by_div + branch_decode_margin;
+        eprintln!(
+            "scaled-BY DIV point-add budget: scaffold≈{non_inv_scaffold:.0}, div≈{scaled_by_div:.0}, margin≈{branch_decode_margin:.0}, projected≈{projected:.0}"
+        );
+        assert!(projected < 2_700_000.0, "scaled BY DIV would not beat Google low-qubit Toffoli target");
+        assert!(projected < current_total - 1_500_000.0, "scaled BY DIV lacks inversion-sized saving");
+    }
+
+    #[test]
     fn branch_pattern_entropy_supports_compressed_history_target() {
         // Raw branch history is 560 bits. Encoding each 16-step window as a
         // branch pattern gives a concrete compression target that is closer to
