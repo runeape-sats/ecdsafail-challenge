@@ -412,11 +412,16 @@ Positive forward-row progress:
   the old rows, clears `m` via `Pq=m`, clears `q` from residual high bits, and
   uncomputes residuals. It passes 32 random basis states at `13110 CCX`, peak
   `2256q`.
+- `fixed_matrix_replacement_sample_cost_distribution` generalizes the circuit
+  generator to arbitrary signed sampled BY matrices. On 32 sampled `w=16`
+  matrices: mean `20991 CCX`, p90 `24234`, max `28099`, peak `2256q` for the
+  full pair replacement.
 
 This reopens BY as a live SOTA-shaped route but with precise remaining
-obstacles: arbitrary-matrix replacement and branch/matrix history compression.
-The next implementation target is to run this fixed-matrix replacement over a
-broad sample of signed BY matrices and then assemble a BY tagged-DIV scaffold.
+obstacles: branch/matrix history compression and integration into a 35-window
+BY tagged-DIV scaffold. The fixed-matrix replacement itself is now no longer a
+one-off; sampled costs are in the right range for a sub-MToffoli inversion
+component if matrix selection/history can be solved.
 
 ### Program B — triangular one-inversion schedule (highest payoff, highest risk)
 

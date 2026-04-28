@@ -2074,17 +2074,19 @@ mod tests {
         b.free(sign);
     }
 
-    fn compute_signed_q_from_m_for_sample_matrix(
+    fn compute_signed_q_from_m_for_matrix(
         b: &mut super::super::B,
+        mtx: TransitionMatrix,
         m0: &[super::super::QubitId],
         m1: &[super::super::QubitId],
     ) -> (Vec<super::super::QubitId>, Vec<super::super::QubitId>) {
+        let sgn = det_sign_pow2(mtx, 16);
         let q0 = b.alloc_qubits(34);
         let q1 = b.alloc_qubits(34);
-        add_coeff_times_for_cost(b, 1, m0, &q0);
-        add_coeff_times_for_cost(b, -24576, m1, &q0);
-        add_coeff_times_for_cost(b, 3, m0, &q1);
-        add_coeff_times_for_cost(b, -8192, m1, &q1);
+        add_coeff_times_for_cost(b, sgn * mtx.m11, m0, &q0);
+        add_coeff_times_for_cost(b, -sgn * mtx.m01, m1, &q0);
+        add_coeff_times_for_cost(b, -sgn * mtx.m10, m0, &q1);
+        add_coeff_times_for_cost(b, sgn * mtx.m00, m1, &q1);
         arith_shift_right_inplace_for_cost(b, &q0, 16);
         arith_shift_right_inplace_for_cost(b, &q1, 16);
         (q0, q1)
@@ -2348,8 +2350,9 @@ mod tests {
         (m, z)
     }
 
-    fn emit_signed_sample_old_cleanup_for_test(
+    fn emit_fixed_matrix_old_cleanup_for_test(
         b: &mut super::super::B,
+        mtx: TransitionMatrix,
         x0: &[super::super::QubitId],
         x1: &[super::super::QubitId],
         y0: &[super::super::QubitId],
@@ -2362,18 +2365,18 @@ mod tests {
         Vec<super::super::QubitId>,
         Vec<super::super::QubitId>,
     ) {
-        // Matrix [[-8192,24576],[-3,1]], det=+2^16, adj=[[1,-24576],[3,-8192]].
+        let sgn = det_sign_pow2(mtx, 16);
         let m0 = b.alloc_qubits(16);
         let m1 = b.alloc_qubits(16);
-        compute_row_correction_m_from_sources(b, -8192, x0, 24576, x1, &m0, false);
-        compute_row_correction_m_from_sources(b, -3, x0, 1, x1, &m1, false);
-        let (q0, q1) = compute_signed_q_from_m_for_sample_matrix(b, &m0, &m1);
+        compute_row_correction_m_from_sources(b, mtx.m00, x0, mtx.m01, x1, &m0, false);
+        compute_row_correction_m_from_sources(b, mtx.m10, x0, mtx.m11, x1, &m1, false);
+        let (q0, q1) = compute_signed_q_from_m_for_matrix(b, mtx, &m0, &m1);
         let z0 = b.alloc_qubits(274);
         let z1 = b.alloc_qubits(274);
-        add_signed_coeff_times_for_cost(b, 1, y0, &z0);
-        add_signed_coeff_times_for_cost(b, -24576, y1, &z0);
-        add_signed_coeff_times_for_cost(b, 3, y0, &z1);
-        add_signed_coeff_times_for_cost(b, -8192, y1, &z1);
+        add_signed_coeff_times_for_cost(b, sgn * mtx.m11, y0, &z0);
+        add_signed_coeff_times_for_cost(b, -sgn * mtx.m01, y1, &z0);
+        add_signed_coeff_times_for_cost(b, -sgn * mtx.m10, y0, &z1);
+        add_signed_coeff_times_for_cost(b, sgn * mtx.m00, y1, &z1);
 
         let z0_low = z0[..256].to_vec();
         let z1_low = z1[..256].to_vec();
@@ -2383,20 +2386,18 @@ mod tests {
         subtract_signed_q_times_solinas_c_for_cost(b, &q1, x1);
 
         // Clear m using P*q = m (mod 2^16).
-        add_low_coeff_mod16_for_cost(b, (-8192i128).rem_euclid(1 << 16) as u64, &q0, &m0, true);
-        add_low_coeff_mod16_for_cost(b, 24576, &q1, &m0, true);
-        add_low_coeff_mod16_for_cost(b, (-3i128).rem_euclid(1 << 16) as u64, &q0, &m1, true);
-        add_low_coeff_mod16_for_cost(b, 1, &q1, &m1, true);
+        add_low_coeff_mod16_for_cost(b, mtx.m00.rem_euclid(1 << 16) as u64, &q0, &m0, true);
+        add_low_coeff_mod16_for_cost(b, mtx.m01.rem_euclid(1 << 16) as u64, &q1, &m0, true);
+        add_low_coeff_mod16_for_cost(b, mtx.m10.rem_euclid(1 << 16) as u64, &q0, &m1, true);
+        add_low_coeff_mod16_for_cost(b, mtx.m11.rem_euclid(1 << 16) as u64, &q1, &m1, true);
 
-        // Approximate q cleanup from high bits of z = x + p*q.
         clear_signed_q_from_z_high_for_cost(b, &q0, &z0);
         clear_signed_q_from_z_high_for_cost(b, &q1, &z1);
 
-        // Uncompute residuals from y.
-        add_signed_coeff_times_for_cost(b, -1, y0, &z0);
-        add_signed_coeff_times_for_cost(b, 24576, y1, &z0);
-        add_signed_coeff_times_for_cost(b, -3, y0, &z1);
-        add_signed_coeff_times_for_cost(b, 8192, y1, &z1);
+        add_signed_coeff_times_for_cost(b, -sgn * mtx.m11, y0, &z0);
+        add_signed_coeff_times_for_cost(b, sgn * mtx.m01, y1, &z0);
+        add_signed_coeff_times_for_cost(b, sgn * mtx.m10, y0, &z1);
+        add_signed_coeff_times_for_cost(b, -sgn * mtx.m00, y1, &z1);
         (m0, m1, q0, q1, z0, z1)
     }
 
@@ -2412,7 +2413,7 @@ mod tests {
         let y1 = b.alloc_qubits(WIDTH);
         emit_signed_row_scaled_from_sources_for_test(&mut b, mtx.m00, &x0, mtx.m01, &x1, &y0);
         emit_signed_row_scaled_from_sources_for_test(&mut b, mtx.m10, &x0, mtx.m11, &x1, &y1);
-        let (m0, m1, q0, q1, z0, z1) = emit_signed_sample_old_cleanup_for_test(&mut b, &x0, &x1, &y0, &y1);
+        let (m0, m1, q0, q1, z0, z1) = emit_fixed_matrix_old_cleanup_for_test(&mut b, mtx, &x0, &x1, &y0, &y1);
         let ccx = count_ccx(&b.ops);
         let peak = b.peak_qubits;
         let num_qubits = b.next_qubit as usize;
@@ -2460,6 +2461,47 @@ mod tests {
         eprintln!("signed sample BY fixed-matrix replacement: ccx={ccx}, peak={peak}q");
         assert!(ccx < 45_000, "signed fixed-matrix replacement too costly");
         assert!(peak < 2_700, "signed fixed-matrix replacement peak too high");
+    }
+
+    #[test]
+    fn fixed_matrix_replacement_sample_cost_distribution() {
+        const WIDTH: usize = 274;
+        let mut hasher = sha3::Shake128::default();
+        hasher.update(b"by-fixed-matrix-replacement-cost-dist-v1");
+        let mut reader = hasher.finalize_xof();
+        let mut buf = [0u8; 24];
+        let samples = 32usize;
+        let mut costs = Vec::with_capacity(samples);
+        let mut peaks = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            reader.read(&mut buf);
+            let f_low = (u64::from_le_bytes(buf[0..8].try_into().unwrap()) as i128) | 1;
+            let g_low = u64::from_le_bytes(buf[8..16].try_into().unwrap()) as i128;
+            let delta = (u64::from_le_bytes(buf[16..24].try_into().unwrap()) % 41) as i64 - 20;
+            let (_, _, _, mtx) = jump_matrix_direct_lowword(16, 16, delta, f_low, g_low);
+            let mut b = super::super::B::new();
+            let x0 = b.alloc_qubits(256);
+            let x1 = b.alloc_qubits(256);
+            let y0 = b.alloc_qubits(WIDTH);
+            let y1 = b.alloc_qubits(WIDTH);
+            emit_signed_row_scaled_from_sources_for_test(&mut b, mtx.m00, &x0, mtx.m01, &x1, &y0);
+            emit_signed_row_scaled_from_sources_for_test(&mut b, mtx.m10, &x0, mtx.m11, &x1, &y1);
+            let _regs = emit_fixed_matrix_old_cleanup_for_test(&mut b, mtx, &x0, &x1, &y0, &y1);
+            costs.push(count_ccx(&b.ops));
+            peaks.push(b.peak_qubits);
+        }
+        costs.sort_unstable();
+        peaks.sort_unstable();
+        let mean_cost = costs.iter().sum::<usize>() as f64 / samples as f64;
+        let p90_cost = costs[(samples * 90) / 100];
+        let max_cost = costs[samples - 1];
+        let p90_peak = peaks[(samples * 90) / 100];
+        let max_peak = peaks[samples - 1];
+        eprintln!(
+            "BY fixed-matrix replacement cost distribution: mean_ccx={mean_cost:.1}, p90_ccx={p90_cost}, max_ccx={max_cost}, p90_peak={p90_peak}q, max_peak={max_peak}q"
+        );
+        assert!(p90_cost < 45_000, "fixed-matrix replacement p90 too costly");
+        assert!(max_peak < 2_800, "fixed-matrix replacement sample exceeds cap");
     }
 
     #[test]
