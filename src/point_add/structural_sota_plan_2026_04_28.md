@@ -942,6 +942,34 @@ piece is actually replaced by a BY tagged-division computation inside the point
 add. The 560-step version had one main-harness classical miss; 576 steps passed
 all 9,024 checked shots.
 
+`BY_CENTERED_PAIR2_REPLACE=1` now replaces the pair2 Kaliski cleanup as well.
+It computes `-(ty/tx)` with the same 576-step centered BY tagged-DIV machinery
+and adds it directly into the live `lam` accumulator, avoiding an uncomputed
+quotient output register. Pair2's `ty` product is preserved, then the ordinary
+`ty -= Qy` cleanup finishes the affine `y` output:
+
+```text
+BY_CENTERED_PAIR2_REPLACE=1
+avg_toffoli = 8,189,908
+qubits      = 5,589
+emitted_ops = 51,930,771
+altseed/classical/phase/ancilla failures = 0
+```
+
+Both replacements can be enabled together and pass:
+
+```text
+BY_CENTERED_PAIR1_REPLACE=1 BY_CENTERED_PAIR2_REPLACE=1
+avg_toffoli = 12,251,174
+qubits      = 5,589
+emitted_ops = 72,970,707
+altseed/classical/phase/ancilla failures = 0
+```
+
+Again, this is not a performance result. It proves both Kaliski inverse-sized
+objects in the real affine point-add can be replaced by centered BY tagged-DIV
+objects and still satisfy the full exact checker.
+
 Naively synthesizing the range test is too expensive:
 `naive_centered_parity_recovery_cost_would_erase_redundant_replay_win` measures
 about `1,296 CCX/flag`, or `≈725,760` CCX just to clean 560 parity bits. A cheap
