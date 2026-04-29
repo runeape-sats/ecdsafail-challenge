@@ -4613,6 +4613,7 @@ fn by_signed_lowword_window_xor_controls_for_bench(
     delta_full: &[QubitId],
     odd_hist: &[QubitId],
     a_hist: &[QubitId],
+    q_hist: Option<(&[QubitId], &[QubitId])>,
     start: usize,
 ) {
     // Window selector primitive for the centered-BY denominator path.  The next
@@ -4643,6 +4644,19 @@ fn by_signed_lowword_window_xor_controls_for_bench(
         b.cx(odd_tmp[j], odd_hist[start + j]);
         b.cx(a_tmp[j], a_hist[start + j]);
     }
+    if let Some((q0_hist, q1_hist)) = q_hist {
+        let q_start = (start / W) * QBITS;
+        assert!(q0_hist.len() >= q_start + QBITS);
+        assert!(q1_hist.len() >= q_start + QBITS);
+        // After the local signed divsteps, these narrow rows are exactly the
+        // lowword quotient corrections q=(P·low)/2^16.  Persist them now so a
+        // later fixed-matrix denominator update can consume the q payload.  The
+        // same helper is called in reverse to xor the payload clean again.
+        for i in 0..QBITS {
+            b.cx(f[i], q0_hist[q_start + i]);
+            b.cx(g[i], q1_hist[q_start + i]);
+        }
+    }
     for j in (0..W).rev() {
         by_signed_branch_step_reverse_for_bench(b, &f, &g, &delta, odd_tmp[j], a_tmp[j]);
     }
@@ -4661,6 +4675,11 @@ fn by_signed_lowword_window_xor_controls_for_bench(
 
 fn by_window_controls_enabled_for_bench() -> bool {
     std::env::var("BY_CENTERED_WINDOW_DENOM_REPLACE").ok().as_deref() == Some("1")
+        || by_window_q_payload_enabled_for_bench()
+}
+
+fn by_window_q_payload_enabled_for_bench() -> bool {
+    std::env::var("BY_CENTERED_WINDOW_Q_DENOM_REPLACE").ok().as_deref() == Some("1")
 }
 
 fn by_generate_signed_controls_for_bench(
@@ -4670,12 +4689,13 @@ fn by_generate_signed_controls_for_bench(
     delta: &[QubitId],
     odd: &[QubitId],
     a_ctrl: &[QubitId],
+    q_hist: Option<(&[QubitId], &[QubitId])>,
 ) {
     if by_window_controls_enabled_for_bench() {
         const W: usize = 16;
         assert_eq!(odd.len() % W, 0);
         for start in (0..odd.len()).step_by(W) {
-            by_signed_lowword_window_xor_controls_for_bench(b, f, g, delta, odd, a_ctrl, start);
+            by_signed_lowword_window_xor_controls_for_bench(b, f, g, delta, odd, a_ctrl, q_hist, start);
             for j in 0..W {
                 by_signed_branch_apply_step_for_bench(b, f, g, delta, odd[start + j], a_ctrl[start + j]);
             }
@@ -4694,6 +4714,7 @@ fn by_reverse_signed_controls_for_bench(
     delta: &[QubitId],
     odd: &[QubitId],
     a_ctrl: &[QubitId],
+    q_hist: Option<(&[QubitId], &[QubitId])>,
 ) {
     if by_window_controls_enabled_for_bench() {
         const W: usize = 16;
@@ -4702,7 +4723,7 @@ fn by_reverse_signed_controls_for_bench(
             for j in (0..W).rev() {
                 by_signed_branch_apply_step_reverse_for_bench(b, f, g, delta, odd[start + j], a_ctrl[start + j]);
             }
-            by_signed_lowword_window_xor_controls_for_bench(b, f, g, delta, odd, a_ctrl, start);
+            by_signed_lowword_window_xor_controls_for_bench(b, f, g, delta, odd, a_ctrl, q_hist, start);
         }
     } else {
         for i in (0..odd.len()).rev() {
@@ -5011,6 +5032,7 @@ fn compute_pair1_lam_with_centered_by_bench(b: &mut B, tx: &[QubitId], ty: &[Qub
     const STEPS: usize = 576;
     const DBITS: usize = 12;
     const WIDE: usize = N + 4;
+    const WINDOW_QBITS: usize = 34;
     b.set_phase("pair1_by_centered_alloc");
     let f = b.alloc_qubits(STEPS);
     let g = b.alloc_qubits(STEPS);
@@ -5018,6 +5040,14 @@ fn compute_pair1_lam_with_centered_by_bench(b: &mut B, tx: &[QubitId], ty: &[Qub
     let odd = b.alloc_qubits(STEPS);
     let a_ctrl = b.alloc_qubits(STEPS);
     let parity = b.alloc_qubits(STEPS);
+    let q_hist = if by_window_q_payload_enabled_for_bench() {
+        Some((
+            b.alloc_qubits((STEPS / 16) * WINDOW_QBITS),
+            b.alloc_qubits((STEPS / 16) * WINDOW_QBITS),
+        ))
+    } else {
+        None
+    };
     let r = b.alloc_qubits(WIDE);
     let s = b.alloc_qubits(WIDE);
     let num = b.alloc_qubits(N);
@@ -5040,7 +5070,8 @@ fn compute_pair1_lam_with_centered_by_bench(b: &mut B, tx: &[QubitId], ty: &[Qub
     // branch decisions are sourced from 16-step lowword window oracles, then
     // applied to this full-width state; otherwise this is the original direct
     // per-step generator.
-    by_generate_signed_controls_for_bench(b, &f, &g, &delta, &odd, &a_ctrl);
+    let q_hist_slices = q_hist.as_ref().map(|(q0, q1)| (q0.as_slice(), q1.as_slice()));
+    by_generate_signed_controls_for_bench(b, &f, &g, &delta, &odd, &a_ctrl, q_hist_slices);
 
     b.set_phase("pair1_by_centered_forward");
     for i in 0..STEPS {
@@ -5057,7 +5088,8 @@ fn compute_pair1_lam_with_centered_by_bench(b: &mut B, tx: &[QubitId], ty: &[Qub
     }
 
     b.set_phase("pair1_by_centered_reverse_den");
-    by_reverse_signed_controls_for_bench(b, &f, &g, &delta, &odd, &a_ctrl);
+    let q_hist_slices = q_hist.as_ref().map(|(q0, q1)| (q0.as_slice(), q1.as_slice()));
+    by_reverse_signed_controls_for_bench(b, &f, &g, &delta, &odd, &a_ctrl, q_hist_slices);
 
     b.set_phase("pair1_by_centered_clear");
     by_unload_centered_copy_for_bench(b, &num, &s, p, center_flag);
@@ -5074,6 +5106,10 @@ fn compute_pair1_lam_with_centered_by_bench(b: &mut B, tx: &[QubitId], ty: &[Qub
     b.free_vec(&s);
     b.free_vec(&r);
     b.free_vec(&parity);
+    if let Some((q0_hist, q1_hist)) = q_hist {
+        b.free_vec(&q1_hist);
+        b.free_vec(&q0_hist);
+    }
     b.free_vec(&a_ctrl);
     b.free_vec(&odd);
     b.free_vec(&delta);
@@ -5096,6 +5132,7 @@ fn add_neg_quotient_into_acc_with_centered_by_bench(
     const STEPS: usize = 576;
     const DBITS: usize = 12;
     const WIDE: usize = N + 4;
+    const WINDOW_QBITS: usize = 34;
     b.set_phase("by_centered_accquot_alloc");
     let f = b.alloc_qubits(STEPS);
     let g = b.alloc_qubits(STEPS);
@@ -5103,6 +5140,14 @@ fn add_neg_quotient_into_acc_with_centered_by_bench(
     let odd = b.alloc_qubits(STEPS);
     let a_ctrl = b.alloc_qubits(STEPS);
     let parity = b.alloc_qubits(STEPS);
+    let q_hist = if by_window_q_payload_enabled_for_bench() {
+        Some((
+            b.alloc_qubits((STEPS / 16) * WINDOW_QBITS),
+            b.alloc_qubits((STEPS / 16) * WINDOW_QBITS),
+        ))
+    } else {
+        None
+    };
     let r = b.alloc_qubits(WIDE);
     let s = b.alloc_qubits(WIDE);
     let num = b.alloc_qubits(N);
@@ -5119,7 +5164,8 @@ fn add_neg_quotient_into_acc_with_centered_by_bench(
     let center_flag = by_load_centered_copy_for_bench(b, &num, &s, p);
 
     b.set_phase("by_centered_accquot_generate");
-    by_generate_signed_controls_for_bench(b, &f, &g, &delta, &odd, &a_ctrl);
+    let q_hist_slices = q_hist.as_ref().map(|(q0, q1)| (q0.as_slice(), q1.as_slice()));
+    by_generate_signed_controls_for_bench(b, &f, &g, &delta, &odd, &a_ctrl, q_hist_slices);
 
     b.set_phase("by_centered_accquot_forward");
     for i in 0..STEPS {
@@ -5136,7 +5182,8 @@ fn add_neg_quotient_into_acc_with_centered_by_bench(
     }
 
     b.set_phase("by_centered_accquot_reverse_den");
-    by_reverse_signed_controls_for_bench(b, &f, &g, &delta, &odd, &a_ctrl);
+    let q_hist_slices = q_hist.as_ref().map(|(q0, q1)| (q0.as_slice(), q1.as_slice()));
+    by_reverse_signed_controls_for_bench(b, &f, &g, &delta, &odd, &a_ctrl, q_hist_slices);
 
     b.set_phase("by_centered_accquot_clear");
     by_unload_centered_copy_for_bench(b, &num, &s, p, center_flag);
@@ -5153,6 +5200,10 @@ fn add_neg_quotient_into_acc_with_centered_by_bench(
     b.free_vec(&s);
     b.free_vec(&r);
     b.free_vec(&parity);
+    if let Some((q0_hist, q1_hist)) = q_hist {
+        b.free_vec(&q1_hist);
+        b.free_vec(&q0_hist);
+    }
     b.free_vec(&a_ctrl);
     b.free_vec(&odd);
     b.free_vec(&delta);
