@@ -1048,8 +1048,30 @@ Next deletion: replace the 16 full-width selected-control microsteps with the
 selection and q-payload threading compose; they do not yet consume the q
 corrections.
 
+`BY_SCALED_PAIR2_PRODUCT_REPLACE=1` is the ground-up pair2 variant that should
+have been tried earlier: do not compute `ty=lam*tx` and then divide it back out.
+Instead, use scaled BY inverse/product-clean directly. Generate denominator
+controls, frame the live slope as `u=-sign(f)*lam`, and run inverse scaled BY so
+`(u,0)->(0,lam*tx)`. This avoids centered parity history, deletes the ordinary
+`mul3_between_pair`, and cleans `lam` as the product is written:
+
+```text
+BY_SCALED_PAIR2_PRODUCT_REPLACE=1
+avg_toffoli = 8,038,619
+qubits      = 4,236
+emitted_ops = 49,073,481
+altseed/classical/phase/ancilla failures = 0
+```
+
+This is significantly cleaner than the centered pair2 quotient-add replacement
+(`8,187,601 @ 5,589q`) and validates the inverse/product-clean architecture in
+the real affine schedule. It is still far worse than default because it still
+uses direct 576-step full-width denominator compute/uncompute. This confirms the
+hard boundary: **BY only has a SOTA chance if denominator generation becomes a
+selected/window/consumed update; product-clean replay itself is viable.**
+
 Again, this is not a performance result. It proves both Kaliski inverse-sized
-objects in the real affine point-add can be replaced by centered BY tagged-DIV
+objects in the real affine point-add can be replaced by BY tagged-DIV/product
 objects and still satisfy the full exact checker.
 
 Naively synthesizing the range test is too expensive:
