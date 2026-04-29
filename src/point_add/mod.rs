@@ -8334,9 +8334,9 @@ fn build_standard_point_add(
     // algebra probe with an iteration-threshold phase cliff.  Env overrides are
     // for approximate-correctness threshold research only; default remains the
     // exact checked setting.  For the normal exact path, full-harness probes
-    // after the R_SMALL_THRESHOLD=257 update found pair2=402 clean and
-    // pair2=401 phase-unsafe.
-    let pair2_default = if tagged_div_validate || pair2_branch_inv { 404 } else { 402 };
+    // after the R_SMALL_THRESHOLD=257 / pair1=404 updates found pair2=401
+    // clean and pair2=400 phase-unsafe.
+    let pair2_default = if tagged_div_validate || pair2_branch_inv { 404 } else { 401 };
     let pair2_iters = std::env::var("KAL_PAIR2_ITERS")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
