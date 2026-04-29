@@ -160,9 +160,23 @@ compute + uncompute                            ≈ 607,657 CCX
 current cost-model peak (not production tuned) = 3424q
 ```
 
-Hard gate: do not wire another full BY point-add unless a **single-window**
-prototype demonstrates the selected fixed-matrix update plus history allocation
-under the SOTA-shaped budget.  Raw per-bit BY denominator replay is dead.
+Hard gate result: the selected fixed-matrix escape is also dead with current
+reversible arithmetic.  `selected_fixed_matrix_window_variable_coeff_lower_bound_kills_by`
+models only the unavoidable quantum-selected coefficient multiply-accumulate
+work for one window, omitting coefficient lookup, signs, q corrections, cleanup,
+and history allocation:
+
+```text
+one selected coefficient multiply lower bound = 18,598 CCX
+one selected window lower bound               = 148,784 CCX
+peak of the lower-bound model                 = 2123q
+```
+
+This alone is >14× the ~10k/window target, so the selected-window BY route does
+not get a full point-add attempt.  Current conclusion: **all BY variants tested
+so far miss SOTA for either state or gate cost**.  Do not continue BY unless a
+new primitive makes quantum-selected small-coefficient row formation essentially
+constant-coefficient priced.
 
 Open implementation questions:
 

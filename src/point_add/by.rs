@@ -2559,6 +2559,66 @@ mod tests {
         bitlen_u256_for_compact_pair_test(x.mag)
     }
 
+    fn emit_variable_coeff_times_acc_lower_bound_for_test(
+        b: &mut super::super::B,
+        src: &[super::super::QubitId],
+        coeff: &[super::super::QubitId],
+        acc: &[super::super::QubitId],
+    ) {
+        // Lower-bound-ish implementation for selected matrix rows: for each
+        // possible coefficient bit, controlled-add the shifted source into the
+        // accumulator.  This omits coefficient lookup, signs, overflow cleanup,
+        // modular corrections, and old-register cleanup, so if this is already
+        // too large the selected fixed-matrix BY route is dead.
+        for (shift, &ctrl) in coeff.iter().enumerate() {
+            super::super::cucc_add_ctrl(b, src, &acc[shift..shift + src.len()], ctrl);
+        }
+    }
+
+    #[test]
+    fn selected_fixed_matrix_window_variable_coeff_lower_bound_kills_by() {
+        // Hard gate from the user's instruction: do not build BY unless the
+        // selected-window primitive is already SOTA-shaped.  The fixed-matrix
+        // budget used classical coefficients.  In a real circuit those 16-step
+        // matrix coefficients are pattern-selected quantum data.  Even the
+        // optimistic variable-coefficient multiply-accumulate lower bound for a
+        // single window is far above the ~10k/window target before lookup,
+        // signs, q corrections, cleanup, and history allocation.
+        const WIDTH: usize = 274;
+        const CBITS: usize = 17;
+        let mut b = super::super::B::new();
+        let src = b.alloc_qubits(WIDTH);
+        let coeff = b.alloc_qubits(CBITS);
+        let acc = b.alloc_qubits(WIDTH + CBITS);
+        let start_one = b.ops.len();
+        emit_variable_coeff_times_acc_lower_bound_for_test(&mut b, &src, &coeff, &acc);
+        let one_coeff_ccx = count_ccx(&b.ops[start_one..]);
+
+        let mut b_win = super::super::B::new();
+        let f = b_win.alloc_qubits(WIDTH);
+        let g = b_win.alloc_qubits(WIDTH);
+        let coeffs = (0..8).map(|_| b_win.alloc_qubits(CBITS)).collect::<Vec<_>>();
+        let accs = (0..4).map(|_| b_win.alloc_qubits(WIDTH + CBITS)).collect::<Vec<_>>();
+        let start = b_win.ops.len();
+        // Four coeff*source terms form two new rows; four more are the minimal
+        // adjugate old-clean terms.  This is still missing table lookup and q.
+        emit_variable_coeff_times_acc_lower_bound_for_test(&mut b_win, &f, &coeffs[0], &accs[0]);
+        emit_variable_coeff_times_acc_lower_bound_for_test(&mut b_win, &g, &coeffs[1], &accs[0]);
+        emit_variable_coeff_times_acc_lower_bound_for_test(&mut b_win, &f, &coeffs[2], &accs[1]);
+        emit_variable_coeff_times_acc_lower_bound_for_test(&mut b_win, &g, &coeffs[3], &accs[1]);
+        emit_variable_coeff_times_acc_lower_bound_for_test(&mut b_win, &accs[0][..WIDTH], &coeffs[4], &accs[2]);
+        emit_variable_coeff_times_acc_lower_bound_for_test(&mut b_win, &accs[1][..WIDTH], &coeffs[5], &accs[2]);
+        emit_variable_coeff_times_acc_lower_bound_for_test(&mut b_win, &accs[0][..WIDTH], &coeffs[6], &accs[3]);
+        emit_variable_coeff_times_acc_lower_bound_for_test(&mut b_win, &accs[1][..WIDTH], &coeffs[7], &accs[3]);
+        let window_lower_ccx = count_ccx(&b_win.ops[start..]);
+        eprintln!(
+            "BY selected fixed-matrix variable-coeff lower bound: one_coeff_ccx={one_coeff_ccx}, window_lower_ccx={window_lower_ccx}, peak={}q",
+            b_win.peak_qubits
+        );
+        assert!(one_coeff_ccx > 5_000, "controlled variable coeff multiply unexpectedly cheap");
+        assert!(window_lower_ccx > 40_000, "selected matrix window may still be SOTA-shaped; revisit BY");
+    }
+
     #[test]
     fn denominator_pair_fixed_slack_schedule_50_sidecar_on_samples() {
         // A fixed allocator is much easier than a data-dependent compactor: at
