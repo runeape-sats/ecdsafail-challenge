@@ -1586,6 +1586,73 @@ mod tests {
         Shake256,
     };
 
+    fn product_phase_anf_degree_density(n: usize, phase_mask: u64) -> (usize, usize) {
+        assert!(n > 0 && n <= 10, "test keeps exhaustive table small");
+        let vars = 2 * n;
+        let states = 1usize << vars;
+        let x_mask = (1u64 << n) - 1;
+        let mut table = vec![0u8; states];
+        for state in 0..states {
+            let x = (state as u64) & x_mask;
+            let y = ((state as u64) >> n) & x_mask;
+            let prod = x * y;
+            table[state] = ((prod & phase_mask).count_ones() & 1) as u8;
+        }
+
+        // Möbius transform from truth table to ANF coefficients.
+        for bit in 0..vars {
+            let step = 1usize << bit;
+            for mask in 0..states {
+                if (mask & step) != 0 {
+                    table[mask] ^= table[mask ^ step];
+                }
+            }
+        }
+
+        let mut degree = 0usize;
+        let mut density = 0usize;
+        for (mask, &coeff) in table.iter().enumerate() {
+            if coeff != 0 {
+                density += 1;
+                degree = degree.max(mask.count_ones() as usize);
+            }
+        }
+        (degree, density)
+    }
+
+    #[test]
+    fn raw_product_measurement_phase_is_dense_not_free_kickmix() {
+        // If a 2n-bit schoolbook product scratch `t=x*y` were simply X-measured,
+        // the random measurement outcomes request phases of the form
+        //     (-1)^(mask · (x*y))
+        // on the preserved x/y registers.  The low product bit is quadratic, but
+        // typical masks also touch carry-dependent high bits.  Exhaustive ANF on
+        // toy widths shows these phase functions are already high-degree and
+        // dense, so raw product-scratch MBUC is not the missing cheap IMUL.
+        for &n in &[4usize, 6, 8, 10] {
+            let full_mask = if 2 * n == 64 { u64::MAX } else { (1u64 << (2 * n)) - 1 };
+            let high_mask = 1u64 << (2 * n - 2);
+            let (deg_full, dens_full) = product_phase_anf_degree_density(n, full_mask);
+            let (deg_high, dens_high) = product_phase_anf_degree_density(n, high_mask);
+            eprintln!(
+                "raw_product_phase n={n} full_deg={deg_full} full_density={dens_full} high_deg={deg_high} high_density={dens_high}"
+            );
+            if n == 10 {
+                println!("METRIC raw_product_mbu_fullmask_degree_n10={deg_full}");
+                println!("METRIC raw_product_mbu_fullmask_density_n10={dens_full}");
+                println!("METRIC raw_product_mbu_highbit_degree_n10={deg_high}");
+                println!("METRIC raw_product_mbu_highbit_density_n10={dens_high}");
+            }
+        }
+
+        let (deg_full, dens_full) = product_phase_anf_degree_density(10, (1u64 << 20) - 1);
+        let (deg_high, dens_high) = product_phase_anf_degree_density(10, 1u64 << 18);
+        assert_eq!(deg_full, 19);
+        assert_eq!(dens_full, 427_812);
+        assert_eq!(deg_high, 19);
+        assert_eq!(dens_high, 120_581);
+    }
+
     /// Classical reference: compute bit-k of carry(x, d, cin).
     /// The carry bit into position k (c_k) is defined by:
     ///   c_0 = cin

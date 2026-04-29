@@ -268,3 +268,27 @@ So after Luo-style inversion sharing, we still also need to collapse at least
 - kill or fold `lam`, and/or
 - eliminate one wide mul transient, and/or
 - change the add choreography so one whole n-wide register never exists.
+
+---
+
+## Later kickmix check: raw product scratch is not a free MBUC target
+
+Google's appendix correctly points at MBUC/kickmix as a major ingredient, so I
+checked whether our remaining wide schoolbook product scratch could be cleared
+by simply X-measuring `t=x*y` and phase-correcting from preserved `x,y`.  The
+phase for a measurement mask is `mask·(x*y)`.
+
+Executable test: `raw_product_measurement_phase_is_dense_not_free_kickmix` in
+`src/point_add/venting.rs`.
+
+Toy exhaustive result at `n=10`:
+
+```text
+all product bits mask: degree 19/20, density 427812/1048576
+one high-bit mask:     degree 19/20, density 120581/1048576
+```
+
+So product high bits are dense carry functions, not just sparse quadratic
+partial products.  Product-scratch MBUC might still be a small multiplier-local
+tradeoff, but it is not an architecture-level route to the missing in-place
+IMUL/DIV primitive.

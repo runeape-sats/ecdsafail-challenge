@@ -5,11 +5,12 @@ matching Google's secp256k1 point-add frontier, not a micro-optimization list.
 
 ## 0. Current measured point
 
-Current committed baseline after the last in-flight retune:
+Current committed exact baseline:
 
-- **4,111,918 Toffoli**
-- **2716 qubits**
-- exact / phase-clean under the 24-seed gate and checks
+- **4,089,274 Toffoli**
+- **2713 qubits**
+- **24,292,787.153 Clifford**, **30,575,944 emitted ops**
+- exact / phase-clean under the hardened alt-seed gate and checks
 
 Google/ZKP targets:
 
@@ -18,9 +19,9 @@ Google/ZKP targets:
 
 So the real gaps are:
 
-- **−1.41M Toffoli** to low-qubit
-- **−2.01M Toffoli** to low-gate
-- **−1541 qubits** to low-qubit
+- **−1.389M Toffoli** to low-qubit
+- **−1.989M Toffoli** to low-gate
+- **−1538 qubits** to low-qubit
 
 ## 1. The Toffoli gap is one inversion-sized object
 
@@ -1605,6 +1606,16 @@ correction is a known-mask bit of `z/x mod p`.  The toy-field ANF test
 `mbuc_product_cleanup_phase_oracle_is_not_low_degree_on_toy_field` shows degree
 15/16 and 32518/65536 monomial density for `p=251`.  This kills the cheap
 sparse/low-degree phase-correction hope; MBUC cleanup still hides a quotient.
+
+Adjacent kickmix check: maybe we do not measure the old multiplier, only a raw
+schoolbook product scratch `t=x*y` while preserving both inputs.  This would
+replace the gate-level inverse of the temporary multiplier with phases
+`(-1)^(mask·(x*y))`.  `raw_product_measurement_phase_is_dense_not_free_kickmix`
+shows that typical product-bit masks are already carry-dense: at toy width
+`n=10`, the all-bit mask has degree `19/20` and density `427812/1048576`, and a
+single high-bit mask has degree `19/20` and density `120581/1048576`.  So raw
+product-scratch MBUC is not a hidden free IMUL/uncompute; high product bits are
+full carry logic, not just quadratic `x_i y_j` phases.
 
 Third primitive attempt: MBUC the Montgomery loop's internal quotient/history
 bits instead of the old multiplier.  In the `(x,old_y)` frame this history is

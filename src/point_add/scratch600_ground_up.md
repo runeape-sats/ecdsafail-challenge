@@ -839,6 +839,26 @@ This does not prove every possible phase-oracle implementation is expensive,
 but it rules out the hoped-for sparse/low-degree correction.  The phase-only
 cleanup is just the quotient problem in disguise.
 
+### Attempt E2b: MBUC raw schoolbook product scratch
+
+A weaker kickmix idea keeps both inputs `x,y` live and only measures the raw
+`2n`-bit scratch product `t=x*y` after using it for modular reduction.  The
+correction for a measurement mask is then `(-1)^(mask·(x*y))`, apparently less
+scary than `z/x` because no division is involved.
+
+`raw_product_measurement_phase_is_dense_not_free_kickmix` shows the carry
+problem immediately.  Exhaustive ANF over toy widths gives, at `n=10`:
+
+```text
+all product bits mask: degree 19/20, density 427812/1048576
+one high-bit mask:     degree 19/20, density 120581/1048576
+```
+
+So high raw-product bits are dense carry functions of `(x,y)`.  This may still
+be marginally cheaper than a gate-level inverse in some local multiplier, but it
+is not the missing SOTA-shaped in-place multiply/divide primitive and should not
+be treated as a free product cleanup.
+
 ### Attempt E3: MBUC Montgomery quotient-history cleanup
 
 A more structured variant keeps the Montgomery loop's internal quotient bits
