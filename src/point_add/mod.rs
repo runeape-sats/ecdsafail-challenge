@@ -4050,7 +4050,8 @@ fn bulk_prefix_safe_iters() -> usize {
     let centered_roundtrip_hook = std::env::var("BY_CENTERED_CLEAN_ROUNDTRIP_BENCH").ok().as_deref() == Some("1")
         || std::env::var("BY_CENTERED_FAST_CLEAN_ROUNDTRIP_BENCH").ok().as_deref() == Some("1")
         || std::env::var("BY_CENTERED_DENOM_CONTROLS_BENCH").ok().as_deref() == Some("1")
-        || std::env::var("BY_CENTERED_LIVE_NUM_BENCH").ok().as_deref() == Some("1");
+        || std::env::var("BY_CENTERED_LIVE_NUM_BENCH").ok().as_deref() == Some("1")
+        || std::env::var("BY_CENTERED_PAIR1_REPLACE").ok().as_deref() == Some("1");
     let default = if centered_roundtrip_hook {
         // The huge centered roundtrip hooks change the circuit hash / RNG stream
         // enough that the aggressively tuned 375 bulk-prefix setting can hit a
@@ -4486,6 +4487,57 @@ fn by_2adic_branch_step_reverse_for_bench(
     b.cx(g[0], odd_hist);
 }
 
+fn by_signed_branch_step_for_bench(
+    b: &mut B,
+    f: &[QubitId],
+    g: &[QubitId],
+    delta: &[QubitId],
+    odd_out: QubitId,
+    a_out: QubitId,
+) {
+    b.cx(g[0], odd_out);
+    let positive = b.alloc_qubit();
+    by_delta_positive_into_for_bench(b, delta, positive);
+    b.ccx(odd_out, positive, a_out);
+    by_delta_positive_into_for_bench(b, delta, positive);
+    b.free(positive);
+
+    for i in 0..f.len() {
+        cswap(b, a_out, f[i], g[i]);
+    }
+    by_twos_cneg_for_bench(b, g, a_out);
+    cucc_add_ctrl(b, f, g, odd_out);
+    by_arithmetic_shift_right_even_for_bench(b, g);
+
+    by_twos_cneg_for_bench(b, delta, a_out);
+    add_nbit_const_fast(b, delta, U256::from(1u64));
+}
+
+fn by_signed_branch_step_reverse_for_bench(
+    b: &mut B,
+    f: &[QubitId],
+    g: &[QubitId],
+    delta: &[QubitId],
+    odd_hist: QubitId,
+    a_hist: QubitId,
+) {
+    sub_nbit_const_fast(b, delta, U256::from(1u64));
+    by_twos_cneg_for_bench(b, delta, a_hist);
+    by_arithmetic_shift_left_even_inverse_for_bench(b, g);
+    cucc_sub_ctrl(b, f, g, odd_hist);
+    by_twos_cneg_for_bench(b, g, a_hist);
+    for i in 0..f.len() {
+        cswap(b, a_hist, f[i], g[i]);
+    }
+
+    let positive = b.alloc_qubit();
+    by_delta_positive_into_for_bench(b, delta, positive);
+    b.ccx(odd_hist, positive, a_hist);
+    by_delta_positive_into_for_bench(b, delta, positive);
+    b.free(positive);
+    b.cx(g[0], odd_hist);
+}
+
 fn emit_centered_signed_by_replay_body_benchmark_scaffold(b: &mut B, p: U256) {
     // Harness integration smoke test for the centered signed redundant replay.
     // Reuses one zero odd/A/parity control so the clean no-op fits next to the
@@ -4676,6 +4728,72 @@ fn emit_centered_signed_by_fast_clean_roundtrip_benchmark_scaffold(b: &mut B, p:
     let _ = (odd, a_ctrl, parity, r, s);
 }
 
+fn by_copy_signed_mod_p_for_bench(b: &mut B, signed: &[QubitId], out: &[QubitId], p: U256) {
+    assert!(signed.len() > out.len());
+    for i in 0..out.len() {
+        b.cx(signed[i], out[i]);
+    }
+    let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1u64));
+    csub_nbit_const(b, out, c, signed[signed.len() - 1]);
+}
+
+fn by_uncopy_signed_mod_p_for_bench(b: &mut B, signed: &[QubitId], out: &[QubitId], p: U256) {
+    assert!(signed.len() > out.len());
+    let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1u64));
+    cadd_nbit_const(b, out, c, signed[signed.len() - 1]);
+    for i in 0..out.len() {
+        b.cx(signed[i], out[i]);
+    }
+}
+
+fn by_cmod_add_qq_exact_for_bench(b: &mut B, acc: &[QubitId], a: &[QubitId], ctrl: QubitId, p: U256) {
+    let f = b.alloc_qubits(acc.len());
+    for i in 0..acc.len() {
+        b.ccx(ctrl, a[i], f[i]);
+    }
+    mod_add_qq(b, acc, &f, p);
+    for i in 0..acc.len() {
+        b.ccx(ctrl, a[i], f[i]);
+    }
+    b.free_vec(&f);
+}
+
+fn by_cmod_sub_qq_exact_for_bench(b: &mut B, acc: &[QubitId], a: &[QubitId], ctrl: QubitId, p: U256) {
+    let f = b.alloc_qubits(acc.len());
+    for i in 0..acc.len() {
+        b.ccx(ctrl, a[i], f[i]);
+    }
+    mod_sub_qq(b, acc, &f, p);
+    for i in 0..acc.len() {
+        b.ccx(ctrl, a[i], f[i]);
+    }
+    b.free_vec(&f);
+}
+
+fn by_write_neg_quotient_from_centered_r_for_bench(
+    b: &mut B,
+    lam: &[QubitId],
+    r: &[QubitId],
+    f_neg: QubitId,
+    p: U256,
+) {
+    // Tagged recovery is q = sign(f)*r - 1.  The point-add scaffold wants
+    // lam = -q = 1 - sign(f)*r.
+    b.x(lam[0]);
+    let r_mod = b.alloc_qubits(lam.len());
+    by_copy_signed_mod_p_for_bench(b, r, &r_mod, p);
+    let f_pos = b.alloc_qubit();
+    b.x(f_pos);
+    b.cx(f_neg, f_pos);
+    by_cmod_sub_qq_exact_for_bench(b, lam, &r_mod, f_pos, p);
+    by_cmod_add_qq_exact_for_bench(b, lam, &r_mod, f_neg, p);
+    b.cx(f_neg, f_pos);
+    b.x(f_pos);
+    b.free(f_pos);
+    by_uncopy_signed_mod_p_for_bench(b, r, &r_mod, p);
+    b.free_vec(&r_mod);
+}
+
 fn by_load_centered_copy_for_bench(b: &mut B, src: &[QubitId], dst: &[QubitId], p: U256) -> QubitId {
     assert!(dst.len() >= src.len());
     for i in 0..src.len() {
@@ -4701,6 +4819,88 @@ fn by_unload_centered_copy_for_bench(b: &mut B, src: &[QubitId], dst: &[QubitId]
         b.cx(src[i], dst[i]);
     }
     b.free(center_flag);
+}
+
+fn compute_pair1_lam_with_centered_by_bench(b: &mut B, tx: &[QubitId], ty: &[QubitId], p: U256) -> Vec<QubitId> {
+    // Functional pair1 experiment: compute lam=-dy/dx using denominator-derived
+    // BY controls and centered tagged numerator replay.  This is Bennett-style:
+    // copy the recovered lam, then reverse replay/control generation so only lam
+    // remains.  The caller can use the ordinary mul2 cleanup to zero ty.
+    const STEPS: usize = 576;
+    const DBITS: usize = 12;
+    const WIDE: usize = N + 4;
+    b.set_phase("pair1_by_centered_alloc");
+    let f = b.alloc_qubits(STEPS);
+    let g = b.alloc_qubits(STEPS);
+    let delta = b.alloc_qubits(DBITS);
+    let odd = b.alloc_qubits(STEPS);
+    let a_ctrl = b.alloc_qubits(STEPS);
+    let parity = b.alloc_qubits(STEPS);
+    let r = b.alloc_qubits(WIDE);
+    let s = b.alloc_qubits(WIDE);
+    let num = b.alloc_qubits(N);
+    let lam = b.alloc_qubits(N);
+
+    for i in 0..N {
+        if bit(p, i) {
+            b.x(f[i]);
+        }
+        b.cx(tx[i], g[i]);
+        b.cx(ty[i], num[i]);
+    }
+    b.x(delta[0]);
+    mod_add_qq_fast(b, &num, tx, p); // tagged numerator: dy + dx
+    let center_flag = by_load_centered_copy_for_bench(b, &num, &s, p);
+
+    b.set_phase("pair1_by_centered_generate");
+    for i in 0..STEPS {
+        // Full-width denominator evolution preserves the final f sign needed
+        // by tagged quotient recovery. The tapered generator intentionally
+        // discards high 2-adic bits and is fine for controls-only hooks, but not
+        // for producing a quotient frame.
+        by_signed_branch_step_for_bench(b, &f, &g, &delta, odd[i], a_ctrl[i]);
+    }
+
+    b.set_phase("pair1_by_centered_forward");
+    for i in 0..STEPS {
+        centered_signed_by_microstep_for_bench(b, &r, &s, odd[i], a_ctrl[i], parity[i], p);
+    }
+
+    b.set_phase("pair1_by_centered_copy_lam");
+    by_write_neg_quotient_from_centered_r_for_bench(b, &lam, &r, f[STEPS - 1], p);
+
+    b.set_phase("pair1_by_centered_inverse_replay");
+    for i in (0..STEPS).rev() {
+        centered_signed_by_microstep_inverse_for_bench(b, &r, &s, odd[i], a_ctrl[i], parity[i], p);
+        centered_signed_by_clear_parity_after_inverse_for_bench(b, &r, &s, odd[i], parity[i]);
+    }
+
+    b.set_phase("pair1_by_centered_reverse_den");
+    for i in (0..STEPS).rev() {
+        by_signed_branch_step_reverse_for_bench(b, &f, &g, &delta, odd[i], a_ctrl[i]);
+    }
+
+    b.set_phase("pair1_by_centered_clear");
+    by_unload_centered_copy_for_bench(b, &num, &s, p, center_flag);
+    mod_sub_qq_fast(b, &num, tx, p);
+    for i in 0..N {
+        b.cx(ty[i], num[i]);
+        b.cx(tx[i], g[i]);
+        if bit(p, i) {
+            b.x(f[i]);
+        }
+    }
+    b.x(delta[0]);
+    b.free_vec(&num);
+    b.free_vec(&s);
+    b.free_vec(&r);
+    b.free_vec(&parity);
+    b.free_vec(&a_ctrl);
+    b.free_vec(&odd);
+    b.free_vec(&delta);
+    b.free_vec(&g);
+    b.free_vec(&f);
+    lam
 }
 
 fn emit_centered_by_denominator_derived_controls_benchmark_scaffold(b: &mut B, tx: &[QubitId], p: U256) {
@@ -7332,6 +7532,7 @@ fn build_standard_point_add(
     p: U256,
 ) {
     let pair2_branch_inv = std::env::var("KAL_PAIR2_BRANCH_INV_ROLL").ok().as_deref() == Some("1");
+    let by_pair1_centered = std::env::var("BY_CENTERED_PAIR1_REPLACE").ok().as_deref() == Some("1");
     let coeff_channel_div = std::env::var("KAL_TAGGED_DIV_COEFF_CHANNEL").ok().as_deref() == Some("1");
     let branch_hist_div = std::env::var("KAL_TAGGED_DIV_BRANCH_HIST").ok().as_deref() == Some("1");
     let branch_stream_div = std::env::var("KAL_TAGGED_DIV_BRANCH_STREAM").ok().as_deref() == Some("1");
@@ -7357,7 +7558,7 @@ fn build_standard_point_add(
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(pair2_default);
-    if tagged_div_validate {
+    if tagged_div_validate && !by_pair1_centered {
         // Structural validation path for the 600-scratch DIV idea: seed the
         // numerator as dy+dx, so the Kaliski coefficient output is tagged by
         // a known k*dx term. This is default-off because it adds gates; it is
@@ -7367,7 +7568,12 @@ fn build_standard_point_add(
     }
 
     let lam_cell: std::cell::RefCell<Option<Vec<QubitId>>> = std::cell::RefCell::new(None);
-    if branch_term_roll_div {
+    if by_pair1_centered {
+        let lam_inner = compute_pair1_lam_with_centered_by_bench(b, &tx, &ty, p);
+        b.set_phase("pair1_by_centered_zero_ty_mul2");
+        mod_mul_add_into_acc_schoolbook(b, &ty, &lam_inner, &tx, p);
+        *lam_cell.borrow_mut() = Some(lam_inner);
+    } else if branch_term_roll_div {
         // Compressed branch stream with a rolling active flag. This keeps the
         // 9-bit terminal index qubit saving, but avoids branch_term's expensive
         // per-iteration `term_idx > i` comparator and double cmod-add replay.

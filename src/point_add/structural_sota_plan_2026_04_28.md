@@ -909,10 +909,38 @@ altseed/classical/phase/ancilla failures = 0
 
 So the production harness now accepts live denominator-derived controls acting
 on live numerator-derived signed data, with all controls/parity/numerator copy
-cleaned. The remaining replacement work is to stop reversing the replay as a
-no-op: run pair1 forward to write the tagged quotient channel, or pair2 inverse
-to write the product-clean channel, then delete the corresponding Kaliski/mul
-piece.
+cleaned.
+
+The first actual replacement hook is now wired as
+`BY_CENTERED_PAIR1_REPLACE=1`. It replaces pair1's Kaliski inverse and first
+schoolbook multiplication by a centered BY tagged-division Bennett computation:
+
+1. copy `dx` into a full-width signed BY denominator state,
+2. generate 576 BY odd/A controls (full width, not tapered, so final `sign(f)`
+   is available),
+3. build a tagged numerator copy `dy+dx`, center it, and run the fast centered
+   replay forward,
+4. copy `lam=-dy/dx` out of the tagged frame using `lam = 1 - sign(f)*r`,
+5. inverse replay to clean parity and numerator scratch,
+6. reverse denominator generation to clean controls,
+7. use the existing pair1 `mul2` to zero `ty`.
+
+The real point-add harness accepts it:
+
+```text
+BY_CENTERED_PAIR1_REPLACE=1
+avg_toffoli = 8,172,700
+qubits      = 5,589
+emitted_ops = 51,801,485
+altseed/classical/phase/ancilla failures = 0
+```
+
+This is much worse than baseline because it uses the direct full-width 576-step
+denominator generator and Bennett replay, and it still keeps pair1 `mul2` plus
+all of pair2 Kaliski. But it is the first env-gated path where a Kaliski-sized
+piece is actually replaced by a BY tagged-division computation inside the point
+add. The 560-step version had one main-harness classical miss; 576 steps passed
+all 9,024 checked shots.
 
 Naively synthesizing the range test is too expensive:
 `naive_centered_parity_recovery_cost_would_erase_redundant_replay_win` measures
