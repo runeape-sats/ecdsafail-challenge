@@ -4052,7 +4052,8 @@ fn bulk_prefix_safe_iters() -> usize {
         || std::env::var("BY_CENTERED_DENOM_CONTROLS_BENCH").ok().as_deref() == Some("1")
         || std::env::var("BY_CENTERED_LIVE_NUM_BENCH").ok().as_deref() == Some("1")
         || std::env::var("BY_CENTERED_PAIR1_REPLACE").ok().as_deref() == Some("1")
-        || std::env::var("BY_CENTERED_PAIR2_REPLACE").ok().as_deref() == Some("1");
+        || std::env::var("BY_CENTERED_PAIR2_REPLACE").ok().as_deref() == Some("1")
+        || std::env::var("BY_SCALED_PAIR2_PRODUCT_REPLACE").ok().as_deref() == Some("1");
     let centered_q_payload_hook = std::env::var("BY_CENTERED_WINDOW_Q_DENOM_REPLACE").ok().as_deref() == Some("1");
     let default = if centered_q_payload_hook {
         // The narrower q-payload history changes the circuit shape enough that
@@ -4123,6 +4124,26 @@ fn by_cmod_neg_inplace_fast(b: &mut B, v: &[QubitId], ctrl: QubitId, p: U256) {
     cadd_nbit_const_fast(b, v, p.wrapping_add(U256::from(1u64)), ctrl);
 }
 
+fn by_cmod_neg_inplace_canonical_for_bench(b: &mut B, v: &[QubitId], ctrl: QubitId, p: U256) {
+    // ctrl ? (-v mod p) : v, preserving the canonical zero representative.  The
+    // fast BY negation maps 0 -> p; that is fine inside replay scaffolds but not
+    // when the pair2 product-clean path wants to free the slope register after
+    // inverse replay.  Nonzeroness is invariant under v -> p-v, so the flag can
+    // be uncomputed after the controlled negation.
+    let nz = b.alloc_qubit();
+    let do_neg = b.alloc_qubit();
+    cmp_neq_zero_into(b, v, nz);
+    b.ccx(ctrl, nz, do_neg);
+    for &q in v {
+        b.cx(do_neg, q);
+    }
+    cadd_nbit_const_fast(b, v, p.wrapping_add(U256::from(1u64)), do_neg);
+    b.ccx(ctrl, nz, do_neg);
+    cmp_neq_zero_into(b, v, nz);
+    b.free(do_neg);
+    b.free(nz);
+}
+
 fn scaled_by_controlled_microstep(b: &mut B, r: &[QubitId], s: &[QubitId], odd: QubitId, a: QubitId, p: U256) {
     // Direct scaled Bernstein-Yang tagged-DIV microstep:
     //   C: (r,s) -> (r, s/2)
@@ -4135,6 +4156,28 @@ fn scaled_by_controlled_microstep(b: &mut B, r: &[QubitId], s: &[QubitId], odd: 
     by_cmod_neg_inplace_fast(b, s, a, p);
     cmod_add_qq(b, s, r, odd, p);
     mod_halve_inplace_fast(b, s, p);
+}
+
+fn scaled_by_controlled_microstep_inverse_negr_for_bench(
+    b: &mut B,
+    u_neg_r: &[QubitId],
+    s: &[QubitId],
+    odd: QubitId,
+    a: QubitId,
+    p: U256,
+) {
+    // Inverse scaled BY step in the sign-flipped frame u=-r:
+    //   C: (u,s) -> (u, 2s)
+    //   B: (u,s) -> (u, 2s+u)
+    //   A: (u,s) -> (u+2s, -u)
+    // This product-clean path avoids centered parity history entirely.  Use the
+    // canonical controlled negation so a logically-zero final u can be freed.
+    mod_double_inplace_fast(b, s, p);
+    cmod_add_qq(b, s, u_neg_r, odd, p);
+    for i in 0..u_neg_r.len() {
+        cswap(b, a, u_neg_r[i], s[i]);
+    }
+    by_cmod_neg_inplace_canonical_for_bench(b, s, a, p);
 }
 
 fn emit_scaled_by_pattern_replay_benchmark_scaffold(b: &mut B, p: U256) {
@@ -5130,6 +5173,74 @@ fn compute_pair1_lam_with_centered_by_bench(b: &mut B, tx: &[QubitId], ty: &[Qub
     b.free_vec(&g);
     b.free_vec(&f);
     lam
+}
+
+fn write_pair2_product_and_clean_lam_with_scaled_by_bench(
+    b: &mut B,
+    lam: &[QubitId],
+    denom: &[QubitId],
+    product: &[QubitId],
+    p: U256,
+) {
+    // Last-shot BY architecture: use scaled BY inverse/product-clean directly
+    // for pair2.  Given q=lam and denominator x, the inverse scaled replay maps
+    // (sign(f)*q, 0) -> (0, q*x).  In the u=-r frame the input is
+    // u = -sign(f)*q, so f>0 selects -q and f<0 leaves q.  This deletes pair2's
+    // old q*x multiplication and avoids centered parity history; it still uses
+    // the direct 576-step denominator generator and is therefore a correctness
+    // probe, not yet SOTA-shaped.
+    const STEPS: usize = 576;
+    const DBITS: usize = 12;
+    b.set_phase("pair2_by_scaled_product_alloc");
+    let f = b.alloc_qubits(STEPS);
+    let g = b.alloc_qubits(STEPS);
+    let delta = b.alloc_qubits(DBITS);
+    let odd = b.alloc_qubits(STEPS);
+    let a_ctrl = b.alloc_qubits(STEPS);
+
+    for i in 0..N {
+        if bit(p, i) {
+            b.x(f[i]);
+        }
+        b.cx(denom[i], g[i]);
+    }
+    b.x(delta[0]);
+
+    b.set_phase("pair2_by_scaled_product_generate");
+    by_generate_signed_controls_for_bench(b, &f, &g, &delta, &odd, &a_ctrl, None);
+
+    b.set_phase("pair2_by_scaled_product_frame");
+    let f_pos = b.alloc_qubit();
+    b.x(f_pos);
+    b.cx(f[STEPS - 1], f_pos);
+    by_cmod_neg_inplace_canonical_for_bench(b, lam, f_pos, p);
+
+    b.set_phase("pair2_by_scaled_product_inverse");
+    for i in (0..STEPS).rev() {
+        scaled_by_controlled_microstep_inverse_negr_for_bench(b, lam, product, odd[i], a_ctrl[i], p);
+    }
+
+    b.set_phase("pair2_by_scaled_product_clear_frame");
+    b.cx(f[STEPS - 1], f_pos);
+    b.x(f_pos);
+    b.free(f_pos);
+
+    b.set_phase("pair2_by_scaled_product_reverse_den");
+    by_reverse_signed_controls_for_bench(b, &f, &g, &delta, &odd, &a_ctrl, None);
+
+    b.set_phase("pair2_by_scaled_product_clear");
+    for i in 0..N {
+        b.cx(denom[i], g[i]);
+        if bit(p, i) {
+            b.x(f[i]);
+        }
+    }
+    b.x(delta[0]);
+    b.free_vec(&a_ctrl);
+    b.free_vec(&odd);
+    b.free_vec(&delta);
+    b.free_vec(&g);
+    b.free_vec(&f);
 }
 
 fn add_neg_quotient_into_acc_with_centered_by_bench(
@@ -7856,6 +7967,7 @@ fn build_standard_point_add(
     let pair2_branch_inv = std::env::var("KAL_PAIR2_BRANCH_INV_ROLL").ok().as_deref() == Some("1");
     let by_pair1_centered = std::env::var("BY_CENTERED_PAIR1_REPLACE").ok().as_deref() == Some("1");
     let by_pair2_centered = std::env::var("BY_CENTERED_PAIR2_REPLACE").ok().as_deref() == Some("1");
+    let by_pair2_scaled_product = std::env::var("BY_SCALED_PAIR2_PRODUCT_REPLACE").ok().as_deref() == Some("1");
     let coeff_channel_div = std::env::var("KAL_TAGGED_DIV_COEFF_CHANNEL").ok().as_deref() == Some("1");
     let branch_hist_div = std::env::var("KAL_TAGGED_DIV_BRANCH_HIST").ok().as_deref() == Some("1");
     let branch_stream_div = std::env::var("KAL_TAGGED_DIV_BRANCH_STREAM").ok().as_deref() == Some("1");
@@ -8053,6 +8165,12 @@ fn build_standard_point_add(
     mod_add_double_qb(b, &tx, &ox, p);
     mod_add_qb(b, &tx, &ox, p);
     mod_neg_inplace_fast(b, &tx, p);
+    if by_pair2_scaled_product {
+        b.set_phase("pair2_by_scaled_product");
+        write_pair2_product_and_clean_lam_with_scaled_by_bench(b, &lam, &tx, &ty, p);
+        b.set_phase("pair2_by_scaled_product_cleanup");
+        mod_sub_qb(b, &ty, &oy, p);
+    } else {
     b.set_phase("mul3_between_pair");
     mod_mul_write_into_zero_acc_karatsuba2(b, &ty, &lam, &tx, p);
     if by_pair2_centered {
@@ -8088,6 +8206,7 @@ fn build_standard_point_add(
             mod_sub_qb(b, &ty, &oy, p);
             b.set_phase("pair2_kaliski_backward");
         });
+    }
     }
     }
     mod_add_qb(b, &tx, &ox, p);
