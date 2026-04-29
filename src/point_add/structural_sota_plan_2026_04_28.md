@@ -1705,10 +1705,25 @@ clean       = yes
 This is useful only for low-emitted-op / low-qubit tradeoff work (`-1` qubit,
 `-1.5M` emitted ops, `+18,684` Toffoli versus default).
 
-Default exact path after adding the env-gated primitive remains unchanged:
+Default exact path after adding the env-gated primitive initially remained
+unchanged at `4,111,918 @2716q`.  A separate local threshold probe then found a
+small exact win in the Kaliski coefficient range bound.  The old
+`R_SMALL_THRESHOLD=255` controlled when `r := 2r` / reverse halve could skip the
+Solinas correction because `r` was guaranteed small.  Env probes showed:
 
 ```text
-avg_toffoli = 4,111,918
+KAL_R_SMALL_THRESHOLD=256  avg_toffoli=4,110,898 clean
+KAL_R_SMALL_THRESHOLD=257  avg_toffoli=4,109,878 clean
+KAL_R_SMALL_THRESHOLD=258  phase failure (global_phase=0x0000000008000000)
+KAL_R_SMALL_THRESHOLD=258 KAL_BULK3_ITERS=370 altseed phase failure=1
+```
+
+Default is now `R_SMALL_THRESHOLD=257`:
+
+```text
+avg_toffoli = 4,109,878
 qubits      = 2,716
 clean       = yes
 ```
+
+This is only a `-2,040` Toffoli local gain, but it is exact and default-clean.

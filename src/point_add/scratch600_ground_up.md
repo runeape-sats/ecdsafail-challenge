@@ -815,3 +815,18 @@ So direct cadd is useful only as an env-gated tested tool; it does not improve
 the default Toffoli/qubit point.  Combining both direct cadd and csub under the
 conservative prefix is clean at `4,130,602 @ 2715q` with `29,250,534` emitted
 ops; this is a low-emitted-op/qubit tradeoff, not a SOTA path.
+
+## R-small no-correction threshold update
+
+The Kaliski `r` smallness shortcut now defaults to 257 iterations instead of
+255:
+
+```text
+KAL_R_SMALL_THRESHOLD=256  -> 4,110,898 @2716q clean
+KAL_R_SMALL_THRESHOLD=257  -> 4,109,878 @2716q clean
+KAL_R_SMALL_THRESHOLD=258  -> phase failure
+```
+
+`258` also fails with conservative `KAL_BULK3_ITERS=370`, so the clean cliff is
+real in this scaffold.  Default exact is now `4,109,878 @2716q`; this is only a
+small local gain, not a structural route.
