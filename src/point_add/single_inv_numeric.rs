@@ -4279,11 +4279,11 @@ mod tests {
         super::super::sub_nbit_qq_fast(b, v, u); // u=d
         emit_trailing_zero_active_chain_history_for_plusminus(b, u, active, hist);
         let kbits = b.alloc_qubits(plusminus_kbit_width_for_history_len(hist.len()));
-        emit_unary_history_to_binary_count_for_plusminus(b, hist, &kbits);
+        emit_unary_history_to_binary_threshold_xor_for_plusminus(b, hist, &kbits);
         emit_barrel_left_shift_unsigned_exact_inverse_for_plusminus(b, u, &kbits, spill); // u=d>>k
         emit_controlled_integer_add_for_plusminus(b, cu, cv, one, true);
         emit_barrel_left_shift_signed_nooverflow_for_plusminus(b, cv, &kbits, spill); // cv=cv<<k
-        emit_unary_history_to_binary_count_inverse_for_plusminus(b, hist, &kbits);
+        emit_unary_history_to_binary_threshold_xor_for_plusminus(b, hist, &kbits);
         b.free_vec(&kbits);
         super::super::cmp_lt_into(b, u, v, flag);
         for i in 0..u.len() {
@@ -4314,11 +4314,11 @@ mod tests {
         }
         super::super::cmp_lt_into(b, u, v, flag);
         let kbits = b.alloc_qubits(plusminus_kbit_width_for_history_len(hist.len()));
-        emit_unary_history_to_binary_count_for_plusminus(b, hist, &kbits);
+        emit_unary_history_to_binary_threshold_xor_for_plusminus(b, hist, &kbits);
         emit_barrel_left_shift_signed_nooverflow_inverse_for_plusminus(b, cv, &kbits, spill);
         emit_controlled_integer_add_for_plusminus(b, cu, cv, one, false);
         emit_barrel_left_shift_unsigned_exact_for_plusminus(b, u, &kbits, spill);
-        emit_unary_history_to_binary_count_inverse_for_plusminus(b, hist, &kbits);
+        emit_unary_history_to_binary_threshold_xor_for_plusminus(b, hist, &kbits);
         b.free_vec(&kbits);
         emit_trailing_zero_active_chain_history_for_plusminus(b, u, active, hist);
         super::super::add_nbit_qq_fast(b, v, u);
