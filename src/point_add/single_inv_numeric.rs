@@ -3071,6 +3071,100 @@ mod tests {
     }
 
     #[test]
+    fn plusminus_exponent_only_denominator_normalization_is_not_exact() {
+        // Maybe normalization can be controlled by the stored offset exponent
+        // without a dense bitlength oracle.  Test the best public threshold on
+        // exponent for each step/lane.  Any mismatches mean exponent alone is
+        // not an exact coherent control for keeping raw width <=257.
+        let p = SECP256K1_P;
+        let samples = 2048usize;
+        let max_steps = 205usize;
+        let max_e = 512usize;
+        let mut rng = 0xe0ff_0a1e_6635_5eedu64;
+        let mut totals = vec![[[0usize; 512]; 2]; max_steps];
+        let mut events = vec![[[0usize; 512]; 2]; max_steps];
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() { x = U256::from(1u64); }
+            let mut u = u512_from_u256_for_halfgcd_test(p);
+            let mut v = u512_from_u256_for_halfgcd_test(x);
+            let initial_twos = x.trailing_zeros() as usize;
+            v >>= initial_twos;
+            let (mut eu, mut ev) = (0usize, 0usize);
+            if u < v {
+                core::mem::swap(&mut u, &mut v);
+                core::mem::swap(&mut eu, &mut ev);
+            }
+            for step in 0..max_steps {
+                let vals = [(u, eu), (v, ev)];
+                for lane in 0..2 {
+                    let (val, e) = vals[lane];
+                    let eb = e.min(max_e - 1);
+                    totals[step][lane][eb] += 1;
+                    if u512_bit_len_for_halfgcd_test(val) + e > 257 {
+                        events[step][lane][eb] += 1;
+                    }
+                }
+                if u == v { continue; }
+                let mut d = u - v;
+                let k = d.trailing_zeros() as usize;
+                d >>= k;
+                let e_d = eu.max(ev) + k;
+                if d < v {
+                    u = v;
+                    v = d;
+                    eu = ev;
+                    ev = e_d;
+                } else {
+                    u = d;
+                    eu = e_d;
+                }
+            }
+        }
+        let mut total_obs = 0usize;
+        let mut total_mismatches = 0usize;
+        let mut worst_mismatches = 0usize;
+        let mut worst_step = 0usize;
+        let mut worst_lane = 0usize;
+        for step in 0..max_steps {
+            for lane in 0..2 {
+                let lane_total: usize = totals[step][lane].iter().sum();
+                if lane_total == 0 { continue; }
+                let lane_events: usize = events[step][lane].iter().sum();
+                let mut best = lane_events.min(lane_total - lane_events); // always false/true.
+                for threshold in 0..max_e {
+                    let mut mism = 0usize;
+                    for e in 0..max_e {
+                        let predict = e >= threshold;
+                        mism += if predict {
+                            totals[step][lane][e] - events[step][lane][e]
+                        } else {
+                            events[step][lane][e]
+                        };
+                    }
+                    best = best.min(mism);
+                }
+                total_obs += lane_total;
+                total_mismatches += best;
+                if best > worst_mismatches {
+                    worst_mismatches = best;
+                    worst_step = step;
+                    worst_lane = lane;
+                }
+            }
+        }
+        let mismatch_ppm = (total_mismatches * 1_000_000usize) / total_obs.max(1);
+        eprintln!("plus-minus exponent-only normalization classifier: mismatches={total_mismatches}/{total_obs} ppm={mismatch_ppm}, worst_step={worst_step}, worst_lane={worst_lane}, worst_mismatches={worst_mismatches}");
+        println!("METRIC plusminus_exp_only_norm_mismatch_ppm={mismatch_ppm}");
+        println!("METRIC plusminus_exp_only_norm_mismatches={total_mismatches}");
+        println!("METRIC plusminus_exp_only_norm_observations={total_obs}");
+        println!("METRIC plusminus_exp_only_norm_worst_step={worst_step}");
+        println!("METRIC plusminus_exp_only_norm_worst_lane={worst_lane}");
+        println!("METRIC plusminus_exp_only_norm_worst_mismatches={worst_mismatches}");
+        assert!(total_mismatches > 0, "exponent-only normalization is exact on samples; revisit");
+    }
+
+    #[test]
     fn plusminus_public_denominator_normalization_schedule_conflicts() {
         // Can the denominator offset lane be kept <=257 bits by a public
         // step-index normalization schedule?  A necessary condition at a step
