@@ -101,10 +101,99 @@ fn count_ccx(ops: &[crate::circuit::Op]) -> usize {
         .count()
 }
 
+fn inv_mod_u64_pow2_for_cost(a: u64, k: usize) -> u64 {
+    let mask = (1u64 << k) - 1;
+    let mut x = 1u64;
+    for _ in 0..6 {
+        x = x.wrapping_mul(2u64.wrapping_sub(a.wrapping_mul(x))) & mask;
+    }
+    x & mask
+}
+
+fn direct_solinas_multihalve_chunk_cost(k: usize) -> (usize, usize, usize) {
+    let n = N;
+    let p = SECP256K1_P;
+    let c = alloy_primitives::U256::MAX.wrapping_sub(p).wrapping_add(alloy_primitives::U256::from(1u64));
+    let c_u64 = c.as_limbs()[0];
+    let mask = (1u64 << k) - 1;
+    let c_inv = inv_mod_u64_pow2_for_cost(c_u64 & mask, k);
+
+    let mut b_cur = B::new();
+    let v_cur = b_cur.alloc_qubits(n);
+    let start_cur = b_cur.ops.len();
+    for _ in 0..k {
+        mod_halve_inplace_fast(&mut b_cur, &v_cur, p);
+    }
+    let current = count_ccx(&b_cur.ops[start_cur..]);
+
+    let mut b = B::new();
+    let v = b.alloc_qubits(n);
+    let t = b.alloc_qubits(k);
+    let prod_bits = k + 32;
+    let prod = b.alloc_qubits(prod_bits);
+    let start = b.ops.len();
+
+    // t += low(x) * c^{-1} (mod 2^k)
+    for i in 0..k {
+        let ci = ((c_inv as u128) << i) as u64 & mask;
+        super::cadd_nbit_const_direct_fast(&mut b, &t, alloy_primitives::U256::from(ci), v[i]);
+    }
+    // clear low k input bits using low(t*c)
+    for i in 0..k {
+        let ci = ((c_u64 as u128) << i) as u64 & mask;
+        super::csub_nbit_const_direct_fast(&mut b, &v[..k], alloy_primitives::U256::from(ci), t[i]);
+    }
+    // product scratch prod = t*c, then subtract high(prod) after the free shift.
+    for i in 0..k {
+        let ci = c << i;
+        super::cadd_nbit_const_direct_fast(&mut b, &prod, ci, t[i]);
+    }
+    let high = b.alloc_qubits(n);
+    for j in k..prod_bits {
+        b.cx(prod[j], high[j - k]);
+    }
+    super::sub_nbit_qq_fast(&mut b, &high, &v);
+    for j in k..prod_bits {
+        b.cx(prod[j], high[j - k]);
+    }
+    b.free_vec(&high);
+    for i in (0..k).rev() {
+        let ci = c << i;
+        super::csub_nbit_const_direct_fast(&mut b, &prod, ci, t[i]);
+    }
+    // t -= output_high_k; threshold correction not included here.
+    super::sub_nbit_qq_fast(&mut b, &v[n - k..], &t);
+    let candidate_without_corr = count_ccx(&b.ops[start..]);
+
+    // Lower-bound-ish exact cleanup still needs a high-threshold correction on
+    // the lower n-k output bits.  Charge one comparator-width proxy; real code
+    // also needs h*c threshold adjustment, so this is optimistic.
+    let corr_floor = 2 * (n - k);
+    (current, candidate_without_corr, candidate_without_corr + corr_floor)
+}
+
 fn new_builder_with_reg(n: usize) -> (B, Vec<QubitId>) {
     let mut b = B::new();
     let r = b.alloc_qubits(n);
     (b, r)
+}
+
+#[test]
+fn direct_solinas_multihalve_chunk_cost_probe() {
+    let (cur22, cand22_no_corr, cand22_floor) = direct_solinas_multihalve_chunk_cost(22);
+    let (cur8, cand8_no_corr, cand8_floor) = direct_solinas_multihalve_chunk_cost(8);
+    let projected_current_404 = 18 * cur22 + cur8;
+    let projected_floor_404 = 18 * cand22_floor + cand8_floor;
+    let projected_saving_404 = projected_current_404 as isize - projected_floor_404 as isize;
+    eprintln!(
+        "direct Solinas multihalve cost: cur22={cur22}, cand22_no_corr={cand22_no_corr}, cand22_floor={cand22_floor}, cur8={cur8}, cand8_no_corr={cand8_no_corr}, cand8_floor={cand8_floor}, projected_saving_404={projected_saving_404}"
+    );
+    println!("METRIC solinas_multihalve_cur22_ccx={cur22}");
+    println!("METRIC solinas_multihalve_cand22_floor_ccx={cand22_floor}");
+    println!("METRIC solinas_multihalve_cur8_ccx={cur8}");
+    println!("METRIC solinas_multihalve_cand8_floor_ccx={cand8_floor}");
+    println!("METRIC solinas_multihalve_projected_saving_404_ccx={projected_saving_404}");
+    assert!(projected_saving_404 > 10_000);
 }
 
 #[test]
