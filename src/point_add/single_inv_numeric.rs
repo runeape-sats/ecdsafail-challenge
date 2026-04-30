@@ -2473,6 +2473,88 @@ mod tests {
         (shift_payload, direction_payload, steps)
     }
 
+    fn plusminus_k_sequence_for_divisor(x: U256, p: U256) -> Vec<usize> {
+        assert!(!x.is_zero());
+        let mut u = u512_from_u256_for_halfgcd_test(p);
+        let mut v = u512_from_u256_for_halfgcd_test(x);
+        let initial_twos = x.trailing_zeros() as usize;
+        v >>= initial_twos;
+        let mut out = vec![initial_twos];
+        if u < v {
+            core::mem::swap(&mut u, &mut v);
+        }
+        while u != v {
+            let mut d = u - v;
+            let k = d.trailing_zeros() as usize;
+            d >>= k;
+            out.push(k);
+            if v >= d {
+                u = v;
+                v = d;
+            } else {
+                u = d;
+            }
+        }
+        out
+    }
+
+    fn plusminus_kseq_direction_sidecar_bits_for_toy(p: u16) -> (usize, usize) {
+        use std::collections::{BTreeMap, BTreeSet};
+        let mut by_kseq: BTreeMap<Vec<usize>, BTreeSet<Vec<u8>>> = BTreeMap::new();
+        for x in 1..p {
+            let mut u = p as u32;
+            let mut v = (x as u32) >> x.trailing_zeros();
+            let mut ks = vec![x.trailing_zeros() as usize];
+            let mut dirs = Vec::new();
+            if u < v {
+                core::mem::swap(&mut u, &mut v);
+            }
+            while u != v {
+                let diff = u - v;
+                let k = diff.trailing_zeros();
+                let d = diff >> k;
+                ks.push(k as usize);
+                dirs.push(if v >= d { 1u8 } else { 0u8 });
+                if v >= d {
+                    u = v;
+                    v = d;
+                } else {
+                    u = d;
+                }
+            }
+            by_kseq.entry(ks).or_default().insert(dirs);
+        }
+        let mut bits_by_x = Vec::new();
+        let mut max_bits = 0usize;
+        for x in 1..p {
+            let mut u = p as u32;
+            let mut v = (x as u32) >> x.trailing_zeros();
+            let mut ks = vec![x.trailing_zeros() as usize];
+            if u < v {
+                core::mem::swap(&mut u, &mut v);
+            }
+            while u != v {
+                let diff = u - v;
+                let k = diff.trailing_zeros();
+                let d = diff >> k;
+                ks.push(k as usize);
+                if v >= d {
+                    u = v;
+                    v = d;
+                } else {
+                    u = d;
+                }
+            }
+            let mult = by_kseq.get(&ks).unwrap().len();
+            let bits = if mult <= 1 { 0 } else { usize_bit_len_for_payload_test(mult - 1) };
+            max_bits = max_bits.max(bits);
+            bits_by_x.push(bits);
+        }
+        bits_by_x.sort_unstable();
+        let p99 = bits_by_x[bits_by_x.len() * 99 / 100];
+        (max_bits, p99)
+    }
+
     fn plusminus_k_only_reverse_ambiguity_for_toy(p: u16) -> (usize, usize) {
         use std::collections::BTreeMap;
         let mut seen: BTreeMap<(u16, u16, u8), u8> = BTreeMap::new();
@@ -2746,6 +2828,75 @@ mod tests {
         assert!(256 + shift_p99 < 600, "k-only plus-minus stream should be tempting");
         assert!(ambiguity_frac > 0.25, "k-only reverse should not determine the direction bit");
         assert!(256 + exact_p99 > 730, "exact direction history should exceed the 600-scratch target");
+    }
+
+    #[test]
+    fn plusminus_k_sequence_compresses_direction_but_not_parser() {
+        // Correct the per-step direction pessimism: if the entire k-sequence is
+        // known, the ordered plus-minus GCD usually fixes the direction sequence;
+        // on exhaustive n=16 toys, a rank sidecar of at most two bits suffices.
+        // That still does not make a usable 600-scratch primitive, because the
+        // raw binary k payload is not self-delimiting.  Boundary bits or even an
+        // empirical entropy code for the geometric k alphabet exceed the budget.
+        use std::collections::BTreeMap;
+        let (max_dir_bits, p99_dir_bits) = plusminus_kseq_direction_sidecar_bits_for_toy(65521);
+        let p = SECP256K1_P;
+        let samples = 8192usize;
+        let mut rng = 0x51de_c0de_a11c_e55u64;
+        let mut seqs = Vec::with_capacity(samples);
+        let mut freq: BTreeMap<usize, usize> = BTreeMap::new();
+        let mut total = 0usize;
+        let mut raw_payloads = Vec::with_capacity(samples);
+        let mut counts = Vec::with_capacity(samples);
+        let mut unary_payloads = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() { x = U256::from(1u64); }
+            let ks = plusminus_k_sequence_for_divisor(x, p);
+            let raw = ks.iter().map(|&k| usize_bit_len_for_payload_test(k)).sum::<usize>();
+            let unary = ks.iter().sum::<usize>();
+            for &k in &ks {
+                *freq.entry(k).or_insert(0) += 1;
+                total += 1;
+            }
+            counts.push(ks.len());
+            raw_payloads.push(raw);
+            unary_payloads.push(unary);
+            seqs.push(ks);
+        }
+        raw_payloads.sort_unstable();
+        counts.sort_unstable();
+        unary_payloads.sort_unstable();
+        let p99 = samples * 99 / 100;
+        let raw_p99 = raw_payloads[p99];
+        let count_p99 = counts[p99];
+        let unary_p99 = unary_payloads[p99];
+        let boundary_scratch_p99 = 256 + raw_p99 + count_p99;
+        let unary_scratch_p99 = 256 + unary_p99;
+        let log_total = (total as f64).log2();
+        let mut entropy_lengths = Vec::with_capacity(samples);
+        for ks in &seqs {
+            let mut bits = 0.0f64;
+            for &k in ks {
+                let f = *freq.get(&k).unwrap() as f64;
+                bits += log_total - f.log2();
+            }
+            entropy_lengths.push(bits);
+        }
+        entropy_lengths.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let entropy_scratch_p99 = 256.0 + entropy_lengths[p99];
+        eprintln!(
+            "plus-minus k-sequence: dir_max_bits_n16={max_dir_bits}, dir_p99_bits_n16={p99_dir_bits}, raw_p99={raw_p99}, count_p99={count_p99}, boundary_scratch_p99={boundary_scratch_p99}, unary_scratch_p99={unary_scratch_p99}, entropy_scratch_p99={entropy_scratch_p99:.1}"
+        );
+        println!("METRIC plusminus_kseq_direction_max_bits_n16={max_dir_bits}");
+        println!("METRIC plusminus_kseq_direction_p99_bits_n16={p99_dir_bits}");
+        println!("METRIC plusminus_kseq_boundary_scratch_p99={boundary_scratch_p99}");
+        println!("METRIC plusminus_kseq_unary_scratch_p99={unary_scratch_p99}");
+        println!("METRIC plusminus_kseq_entropy_scratch_p99={entropy_scratch_p99:.3}");
+        assert!(max_dir_bits <= 2, "whole k-sequence should nearly determine directions on toys");
+        assert!(boundary_scratch_p99 > 740, "explicit k boundaries should miss scratch");
+        assert!(unary_scratch_p99 > 630, "unary/self-delimiting shifts should miss scratch");
+        assert!(entropy_scratch_p99 > 630.0, "empirical entropy-coded k parser should still miss scratch");
     }
 
     #[test]
