@@ -3726,6 +3726,28 @@ mod tests {
         (degree, density)
     }
 
+    fn solinas_direct_multihalve_history_step_for_test(x: U256, k: usize) -> (U256, u8) {
+        let (y, t) = solinas_direct_multihalve_step_for_test(x, k);
+        let h = (y >> (256usize - k)).as_limbs()[0] & ((1u64 << k) - 1);
+        let e = t.wrapping_sub(h) & ((1u64 << k) - 1);
+        assert!(e <= 1, "residual quotient history should be one correction bit, got {e} for k={k}");
+        (y, e as u8)
+    }
+
+    fn solinas_direct_multihalve_history_reverse_step_for_test(y: U256, e: u8, k: usize) -> U256 {
+        let p = SECP256K1_P;
+        let h = (y >> (256usize - k)).as_limbs()[0] & ((1u64 << k) - 1);
+        let t = h + e as u64;
+        assert!(t < (1u64 << k));
+        let wide_y = u512_from_u256_for_halfgcd_test(y) << k;
+        let wide_tp = u512_from_u256_for_halfgcd_test(p) * U512::from(t);
+        assert!(wide_y >= wide_tp, "reverse multihalve numerator underflow");
+        let x_wide = wide_y - wide_tp;
+        let x = u256_from_low_u512_for_multihalve_test(x_wide);
+        assert!(x < p);
+        x
+    }
+
     #[test]
     fn solinas_chunk_multihalve_has_sparse_quotient_cleanup_shape() {
         // Direct k-bit halving over p=2^256-c is classically much nicer than a
@@ -3774,6 +3796,50 @@ mod tests {
         println!("METRIC solinas_multihalve_output_quotient_density_n14={density}");
         assert!(degree >= 12);
         assert!(density <= 32);
+    }
+
+    #[test]
+    fn solinas_chunk_multihalve_history_carry_is_exact_small_history() {
+        // Exact threshold recomputation is locally too expensive, but the
+        // residual q-high(y) correction is only one bit per chunk. Keeping that
+        // bit through the protected body and consuming it in the explicit
+        // inverse avoids dense threshold cleanup while staying reversible.
+        let p = SECP256K1_P;
+        let schedule404: Vec<usize> = (0..56).map(|_| 7usize).chain((0..2).map(|_| 6usize)).collect();
+        let schedule401: Vec<usize> = (0..55).map(|_| 7usize).chain((0..2).map(|_| 8usize)).collect();
+        assert_eq!(schedule404.iter().sum::<usize>(), 404);
+        assert_eq!(schedule401.iter().sum::<usize>(), 401);
+        let mut rng = 0x51de_ca77_1ed5_0001u64;
+        let samples = 1024usize;
+        for schedule in [&schedule404, &schedule401] {
+            for _ in 0..samples {
+                let x0 = rand_u256(&mut rng) % p;
+                let mut y = x0;
+                let mut hist = Vec::with_capacity(schedule.len());
+                for &k in schedule.iter() {
+                    let (next, e) = solinas_direct_multihalve_history_step_for_test(y, k);
+                    y = next;
+                    hist.push(e);
+                }
+                let mut reference = x0;
+                for _ in 0..schedule.iter().sum::<usize>() {
+                    reference = halve_once_mod_p_for_multihalve_test(reference, p);
+                }
+                assert_eq!(y, reference);
+                for (&k, &e) in schedule.iter().rev().zip(hist.iter().rev()) {
+                    y = solinas_direct_multihalve_history_reverse_step_for_test(y, e, k);
+                }
+                assert_eq!(y, x0);
+            }
+        }
+        eprintln!(
+            "Solinas multihalve history-carry exact: bits404={}, bits401={}, samples={samples}",
+            schedule404.len(),
+            schedule401.len()
+        );
+        println!("METRIC solinas_multihalve_history_bits_404={}", schedule404.len());
+        println!("METRIC solinas_multihalve_history_bits_401={}", schedule401.len());
+        println!("METRIC solinas_multihalve_history_exact_samples={samples}");
     }
 
     #[test]

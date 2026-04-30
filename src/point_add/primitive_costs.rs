@@ -110,7 +110,101 @@ fn inv_mod_u64_pow2_for_cost(a: u64, k: usize) -> u64 {
     x & mask
 }
 
-fn direct_solinas_multihalve_chunk_cost(k: usize) -> (usize, usize, usize) {
+fn xor_solinas_multihalve_threshold_s_for_cost(
+    b: &mut B,
+    h: &[QubitId],
+    s: &[QubitId],
+    k: usize,
+) {
+    // For y = h·2^(n-k)+r and p=2^n-(2^32+977), the quotient cleanup bit is
+    //   e = [r >= 2^(n-k) - floor((2^32+977)(h+1)/2^k)].
+    // For k≤22 the threshold size splits with no carry overlap:
+    //   floor((2^32+977)(h+1)/2^k)
+    //     = (h+1) << (32-k)  +  floor(977(h+1)/2^k),
+    // and the second term fits below bit 10 while the first starts at bit ≥10.
+    assert!(k <= 22);
+    assert_eq!(h.len(), k);
+    assert_eq!(s.len(), 33);
+    let u = b.alloc_qubits(k + 1);
+    for i in 0..k {
+        b.cx(h[i], u[i]);
+    }
+    super::add_nbit_const_fast(b, &u, alloy_primitives::U256::from(1u64));
+
+    let shift = 32usize - k;
+    for i in 0..=k {
+        b.cx(u[i], s[i + shift]);
+    }
+
+    let prod_bits = k + 10; // 977 * 2^k < 2^(k+10)
+    let prod = b.alloc_qubits(prod_bits);
+    for i in 0..=k {
+        let ci = alloy_primitives::U256::from(977u64) << i;
+        super::cadd_nbit_const_direct_fast(b, &prod, ci, u[i]);
+    }
+    for j in k..prod_bits {
+        b.cx(prod[j], s[j - k]);
+    }
+    for i in (0..=k).rev() {
+        let ci = alloy_primitives::U256::from(977u64) << i;
+        super::csub_nbit_const_direct_fast(b, &prod, ci, u[i]);
+    }
+    b.free_vec(&prod);
+
+    super::sub_nbit_const_fast(b, &u, alloy_primitives::U256::from(1u64));
+    for i in (0..k).rev() {
+        b.cx(h[i], u[i]);
+    }
+    b.free_vec(&u);
+}
+
+fn xor_solinas_multihalve_threshold_flag_for_cost(
+    b: &mut B,
+    y: &[QubitId],
+    k: usize,
+    target: QubitId,
+) {
+    let n = y.len();
+    assert_eq!(n, N);
+    assert!(k <= 22);
+    let w = 33usize;
+    let r_len = n - k;
+    assert!(r_len > w);
+
+    // z = 2^(n-k)-1-r = bitwise NOT of the low (n-k)-bit tail.  Since the
+    // threshold s(h) is < 2^33, e iff z_high==0 and z_low<s(h).
+    for i in w..r_len {
+        b.x(y[i]);
+    }
+    let high_zero = b.alloc_qubit();
+    super::with_eq_zero_fast(b, &y[w..r_len], high_zero, |b| {
+        let z_low = b.alloc_qubits(w);
+        for i in 0..w {
+            b.cx(y[i], z_low[i]);
+            b.x(z_low[i]);
+        }
+        let s = b.alloc_qubits(w);
+        xor_solinas_multihalve_threshold_s_for_cost(b, &y[r_len..], &s, k);
+        let lt = b.alloc_qubit();
+        super::with_lt(b, &z_low, &s, lt, |b| {
+            b.ccx(high_zero, lt, target);
+        });
+        b.free(lt);
+        xor_solinas_multihalve_threshold_s_for_cost(b, &y[r_len..], &s, k);
+        b.free_vec(&s);
+        for i in (0..w).rev() {
+            b.x(z_low[i]);
+            b.cx(y[i], z_low[i]);
+        }
+        b.free_vec(&z_low);
+    });
+    b.free(high_zero);
+    for i in (w..r_len).rev() {
+        b.x(y[i]);
+    }
+}
+
+fn direct_solinas_multihalve_chunk_cost(k: usize) -> (usize, usize, usize, usize) {
     let n = N;
     let p = SECP256K1_P;
     let c = alloy_primitives::U256::MAX.wrapping_sub(p).wrapping_add(alloy_primitives::U256::from(1u64));
@@ -161,18 +255,17 @@ fn direct_solinas_multihalve_chunk_cost(k: usize) -> (usize, usize, usize) {
         let ci = c << i;
         super::csub_nbit_const_direct_fast(&mut b, &prod, ci, t[i]);
     }
-    // t -= output_high_k; threshold correction not included here.
+    // t -= output_high_k, leaving the single correction bit e in t[0].
     super::sub_nbit_qq_fast(&mut b, &v[n - k..], &t);
     let candidate_without_corr = count_ccx(&b.ops[start..]);
-
-    // Lower-bound-ish exact cleanup still needs a high-threshold correction on
-    // the lower n-k output bits.  Charge one comparator-width proxy; real code
-    // also needs h*c threshold adjustment, so this is optimistic.
-    let corr_floor = 2 * (n - k);
-    (current, candidate_without_corr, candidate_without_corr + corr_floor)
+    let threshold_start = b.ops.len();
+    xor_solinas_multihalve_threshold_flag_for_cost(&mut b, &v, k, t[0]);
+    let threshold_ccx = count_ccx(&b.ops[threshold_start..]);
+    let candidate_exact = count_ccx(&b.ops[start..]);
+    (current, candidate_without_corr, candidate_exact, threshold_ccx)
 }
 
-fn direct_solinas_multihalve_chunk_cost_split(k: usize) -> (usize, usize, usize) {
+fn direct_solinas_multihalve_chunk_cost_split(k: usize) -> (usize, usize, usize, usize) {
     let n = N;
     let p = SECP256K1_P;
     let c_low = 977u64;
@@ -231,8 +324,11 @@ fn direct_solinas_multihalve_chunk_cost_split(k: usize) -> (usize, usize, usize)
     }
     super::sub_nbit_qq_fast(&mut b, &v[n - k..], &t);
     let candidate_without_corr = count_ccx(&b.ops[start..]);
-    let corr_floor = 2 * (n - k);
-    (current, candidate_without_corr, candidate_without_corr + corr_floor)
+    let threshold_start = b.ops.len();
+    xor_solinas_multihalve_threshold_flag_for_cost(&mut b, &v, k, t[0]);
+    let threshold_ccx = count_ccx(&b.ops[threshold_start..]);
+    let candidate_exact = count_ccx(&b.ops[start..]);
+    (current, candidate_without_corr, candidate_exact, threshold_ccx)
 }
 
 fn new_builder_with_reg(n: usize) -> (B, Vec<QubitId>) {
@@ -243,26 +339,105 @@ fn new_builder_with_reg(n: usize) -> (B, Vec<QubitId>) {
 
 #[test]
 fn direct_solinas_multihalve_chunk_cost_probe() {
-    let (cur22, cand22_no_corr, cand22_floor) = direct_solinas_multihalve_chunk_cost(22);
-    let (cur8, cand8_no_corr, cand8_floor) = direct_solinas_multihalve_chunk_cost(8);
-    let (_cur22s, split22_no_corr, split22_floor) = direct_solinas_multihalve_chunk_cost_split(22);
-    let (_cur8s, split8_no_corr, split8_floor) = direct_solinas_multihalve_chunk_cost_split(8);
+    let (cur22, cand22_no_corr, cand22_exact, thr22) = direct_solinas_multihalve_chunk_cost(22);
+    let (cur8, cand8_no_corr, cand8_exact, thr8) = direct_solinas_multihalve_chunk_cost(8);
+    let (_cur22s, split22_no_corr, split22_exact, split_thr22) = direct_solinas_multihalve_chunk_cost_split(22);
+    let (_cur8s, split8_no_corr, split8_exact, split_thr8) = direct_solinas_multihalve_chunk_cost_split(8);
     let projected_current_404 = 18 * cur22 + cur8;
-    let projected_floor_404 = 18 * cand22_floor + cand8_floor;
-    let projected_saving_404 = projected_current_404 as isize - projected_floor_404 as isize;
-    let projected_split_floor_404 = 18 * split22_floor + split8_floor;
-    let projected_split_saving_404 = projected_current_404 as isize - projected_split_floor_404 as isize;
+    let projected_exact_404 = 18 * cand22_exact + cand8_exact;
+    let projected_saving_404 = projected_current_404 as isize - projected_exact_404 as isize;
+    let projected_split_exact_404 = 18 * split22_exact + split8_exact;
+    let projected_split_saving_404 = projected_current_404 as isize - projected_split_exact_404 as isize;
+    let projected_split_no_threshold_404 = 18 * split22_no_corr + split8_no_corr;
+    let projected_split_no_threshold_saving_404 =
+        projected_current_404 as isize - projected_split_no_threshold_404 as isize;
+    let projected_split_no_threshold_roundtrip_saving_404 = 2 * projected_split_no_threshold_saving_404;
     eprintln!(
-        "direct Solinas multihalve cost: cur22={cur22}, cand22_no_corr={cand22_no_corr}, cand22_floor={cand22_floor}, split22_no_corr={split22_no_corr}, split22_floor={split22_floor}, cur8={cur8}, cand8_no_corr={cand8_no_corr}, cand8_floor={cand8_floor}, split8_no_corr={split8_no_corr}, split8_floor={split8_floor}, projected_saving_404={projected_saving_404}, projected_split_saving_404={projected_split_saving_404}"
+        "direct Solinas multihalve cost: cur22={cur22}, cand22_no_corr={cand22_no_corr}, cand22_exact={cand22_exact}, thr22={thr22}, split22_no_corr={split22_no_corr}, split22_exact={split22_exact}, split_thr22={split_thr22}, cur8={cur8}, cand8_no_corr={cand8_no_corr}, cand8_exact={cand8_exact}, thr8={thr8}, split8_no_corr={split8_no_corr}, split8_exact={split8_exact}, split_thr8={split_thr8}, projected_saving_404={projected_saving_404}, projected_split_saving_404={projected_split_saving_404}, projected_split_no_threshold_saving_404={projected_split_no_threshold_saving_404}"
     );
     println!("METRIC solinas_multihalve_cur22_ccx={cur22}");
-    println!("METRIC solinas_multihalve_cand22_floor_ccx={cand22_floor}");
-    println!("METRIC solinas_multihalve_split22_floor_ccx={split22_floor}");
+    println!("METRIC solinas_multihalve_cand22_no_threshold_ccx={cand22_no_corr}");
+    println!("METRIC solinas_multihalve_cand22_exact_ccx={cand22_exact}");
+    println!("METRIC solinas_multihalve_threshold22_ccx={thr22}");
+    println!("METRIC solinas_multihalve_split22_no_threshold_ccx={split22_no_corr}");
+    println!("METRIC solinas_multihalve_split22_exact_ccx={split22_exact}");
+    println!("METRIC solinas_multihalve_split_threshold22_ccx={split_thr22}");
     println!("METRIC solinas_multihalve_cur8_ccx={cur8}");
-    println!("METRIC solinas_multihalve_cand8_floor_ccx={cand8_floor}");
-    println!("METRIC solinas_multihalve_split8_floor_ccx={split8_floor}");
-    println!("METRIC solinas_multihalve_projected_saving_404_ccx={projected_saving_404}");
-    println!("METRIC solinas_multihalve_split_projected_saving_404_ccx={projected_split_saving_404}");
+    println!("METRIC solinas_multihalve_cand8_no_threshold_ccx={cand8_no_corr}");
+    println!("METRIC solinas_multihalve_cand8_exact_ccx={cand8_exact}");
+    println!("METRIC solinas_multihalve_threshold8_ccx={thr8}");
+    println!("METRIC solinas_multihalve_split8_no_threshold_ccx={split8_no_corr}");
+    println!("METRIC solinas_multihalve_split8_exact_ccx={split8_exact}");
+    println!("METRIC solinas_multihalve_split_threshold8_ccx={split_thr8}");
+    println!("METRIC solinas_multihalve_exact_projected_saving_404_ccx={projected_saving_404}");
+    println!("METRIC solinas_multihalve_split_exact_projected_saving_404_ccx={projected_split_saving_404}");
+    println!("METRIC solinas_multihalve_split_no_threshold_projected_saving_404_ccx={projected_split_no_threshold_saving_404}");
+    println!("METRIC solinas_multihalve_split_no_threshold_roundtrip_saving_404_ccx={projected_split_no_threshold_roundtrip_saving_404}");
+    println!("METRIC solinas_multihalve_split_no_threshold_history_bits_404={}", 19);
+
+    let mut split_exact_by_k = vec![0usize; 23];
+    let mut split_no_threshold_by_k = vec![0usize; 23];
+    let mut best_single_k = 0usize;
+    let mut best_single_saving = isize::MIN;
+    for k in 1..=22 {
+        let (cur, no_corr, exact, threshold) = direct_solinas_multihalve_chunk_cost_split(k);
+        split_exact_by_k[k] = exact;
+        split_no_threshold_by_k[k] = no_corr;
+        let saving = cur as isize - exact as isize;
+        eprintln!("  k={k:2}: cur={cur:5}, split_exact={exact:5}, threshold={threshold:5}, saving={saving:6}");
+        if saving > best_single_saving {
+            best_single_saving = saving;
+            best_single_k = k;
+        }
+    }
+    let inf = usize::MAX / 4;
+    let best_chunking = |cost_by_k: &[usize], len: usize| -> (usize, isize, [usize; 23]) {
+        let mut dp = vec![inf; len + 1];
+        let mut prev = vec![0usize; len + 1];
+        dp[0] = 0;
+        for i in 1..=len {
+            for k in 1..=22.min(i) {
+                let cand = dp[i - k].saturating_add(cost_by_k[k]);
+                if cand < dp[i] {
+                    dp[i] = cand;
+                    prev[i] = k;
+                }
+            }
+        }
+        let mut counts = [0usize; 23];
+        let mut i = len;
+        while i > 0 {
+            let k = prev[i];
+            counts[k] += 1;
+            i -= k;
+        }
+        let current = 255usize * len;
+        let saving = current as isize - dp[len] as isize;
+        (dp[len], saving, counts)
+    };
+    let (exact_dp_cost, exact_dp_saving, exact_counts) = best_chunking(&split_exact_by_k, 404);
+    let (hist_dp_cost, hist_dp_saving, hist_counts) = best_chunking(&split_no_threshold_by_k, 404);
+    let (hist401_dp_cost, hist401_dp_saving, hist401_counts) = best_chunking(&split_no_threshold_by_k, 401);
+    let hist_dp_history_bits: usize = hist_counts.iter().sum();
+    let hist401_dp_history_bits: usize = hist401_counts.iter().sum();
+    let total_pair12_roundtrip_saving = 2 * (hist_dp_saving + hist401_dp_saving);
+    eprintln!("best exact split chunking for 404 halvings: cost={exact_dp_cost}, saving={exact_dp_saving}, counts={:?}", &exact_counts[1..]);
+    eprintln!("best history-carry split chunking for 404 halvings: cost={hist_dp_cost}, saving={hist_dp_saving}, roundtrip_saving={}, history_bits={hist_dp_history_bits}, counts={:?}", 2 * hist_dp_saving, &hist_counts[1..]);
+    eprintln!("best history-carry split chunking for 401 halvings/doubles: cost={hist401_dp_cost}, saving={hist401_dp_saving}, roundtrip_saving={}, history_bits={hist401_dp_history_bits}, counts={:?}", 2 * hist401_dp_saving, &hist401_counts[1..]);
+    println!("METRIC solinas_multihalve_split_exact_best_single_k={best_single_k}");
+    println!("METRIC solinas_multihalve_split_exact_best_single_saving_ccx={best_single_saving}");
+    println!("METRIC solinas_multihalve_split_exact_best_dp_cost_404_ccx={exact_dp_cost}");
+    println!("METRIC solinas_multihalve_split_exact_best_dp_saving_404_ccx={exact_dp_saving}");
+    println!("METRIC solinas_multihalve_split_history_best_dp_cost_404_ccx={hist_dp_cost}");
+    println!("METRIC solinas_multihalve_split_history_best_dp_saving_404_ccx={hist_dp_saving}");
+    println!("METRIC solinas_multihalve_split_history_best_dp_roundtrip_saving_404_ccx={}", 2 * hist_dp_saving);
+    println!("METRIC solinas_multihalve_split_history_best_dp_history_bits_404={hist_dp_history_bits}");
+    println!("METRIC solinas_multihalve_split_history_best_dp_cost_401_ccx={hist401_dp_cost}");
+    println!("METRIC solinas_multihalve_split_history_best_dp_saving_401_ccx={hist401_dp_saving}");
+    println!("METRIC solinas_multihalve_split_history_best_dp_roundtrip_saving_401_ccx={}", 2 * hist401_dp_saving);
+    println!("METRIC solinas_multihalve_split_history_best_dp_history_bits_401={hist401_dp_history_bits}");
+    println!("METRIC solinas_multihalve_split_history_pair12_roundtrip_saving_ccx={total_pair12_roundtrip_saving}");
+    println!("METRIC solinas_multihalve_split_history_pair12_history_bits={}", hist_dp_history_bits + hist401_dp_history_bits);
     assert!(projected_split_saving_404 > projected_saving_404);
 }
 
