@@ -8328,6 +8328,62 @@ mod tests {
     }
 
     #[test]
+    fn centered_euclid_nonrestoring_signed_digit_ledger_reopens_margin() {
+        // New response to the fused-subtract blocker: do not restore the trial
+        // subtract.  A non-restoring signed-remainder division step uses the
+        // sign of the running remainder to choose add vs subtract of v<<k, so
+        // each quotient digit can cost one controlled add/sub (~n) instead of a
+        // compare plus conditional restore.  The quotient history becomes a
+        // signed binary digit stream; replay can consume signed digits directly.
+        // This is only a ledger until a toy reversible extractor validates the
+        // signed-remainder invariant and final correction.
+        let p = SECP256K1_P;
+        let samples = 4096usize;
+        let mut rng = 0x2800_c5d1_61d6_0001u64;
+        let mut payload_bits = Vec::with_capacity(samples);
+        let mut counts = Vec::with_capacity(samples);
+        let mut max_qbits = 0usize;
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() { x = U256::from(1u64); }
+            let qs = centered_euclid_abs_quotients_for_divisor(x, p);
+            let payload = qs
+                .iter()
+                .map(|q| u512_bit_len_for_halfgcd_test(*q).max(1))
+                .sum::<usize>();
+            max_qbits = max_qbits.max(qs.iter().map(|q| u512_bit_len_for_halfgcd_test(*q).max(1)).max().unwrap_or(1));
+            payload_bits.push(payload);
+            counts.push(qs.len());
+        }
+        payload_bits.sort_unstable();
+        counts.sort_unstable();
+        let p99 = samples * 99 / 100;
+        let payload_p99 = payload_bits[p99];
+        let count_p99 = counts[p99];
+        let scaffold_after_div = 642_716isize;
+        let coeff_replay_per_digit = 587usize;
+        let signed_digit_extract_per_digit = 256usize;
+        let barrel_and_scan_per_quotient = 256usize * 8usize + 256usize;
+        let coeff_replay_per_div = payload_p99 * coeff_replay_per_digit;
+        let extraction_oneway = payload_p99 * signed_digit_extract_per_digit
+            + count_p99 * barrel_and_scan_per_quotient;
+        let one_div = coeff_replay_per_div + 2 * extraction_oneway;
+        let pointadd = scaffold_after_div + 2 * one_div as isize;
+        let gap = pointadd - 3_000_000isize;
+        let extraction_oneway_budget = (((3_000_000isize - scaffold_after_div) / 2) as isize
+            - coeff_replay_per_div as isize) / 2;
+        let oneway_margin = extraction_oneway_budget - extraction_oneway as isize;
+        println!("METRIC centered_nonrestoring_payload_p99_bits={payload_p99}");
+        println!("METRIC centered_nonrestoring_count_p99={count_p99}");
+        println!("METRIC centered_nonrestoring_max_qbits_sampled={max_qbits}");
+        println!("METRIC centered_nonrestoring_extraction_oneway_ccx={extraction_oneway}");
+        println!("METRIC centered_nonrestoring_oneway_margin_ccx={oneway_margin}");
+        println!("METRIC centered_nonrestoring_gap_to_3m_ccx={gap}");
+        eprintln!("Centered non-restoring signed-digit ledger: payload_p99={payload_p99}, count_p99={count_p99}, max_qbits={max_qbits}, extraction_oneway={extraction_oneway}, margin={oneway_margin}, pointadd={pointadd}, gap={gap}");
+        assert!(gap < -300_000, "non-restoring signed digits do not leave enough margin to prototype");
+    }
+
+    #[test]
     fn euclid_quotient_stream_entropy_also_exceeds_scratch600() {
         // Follow-up to the raw-payload quotient-stream DIV test.  The tempting
         // objection is that a clever prefix/arithmetic code could pack the
