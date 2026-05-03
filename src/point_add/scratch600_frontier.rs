@@ -121,7 +121,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "direct_centered_restoring_final_raw_digits",
             scratch_bits: 618,
             charged_toffoli: None,
-            blocker: "restoring-final model is under 2.7M and phase-clean in toy; exact coefficient decode averages 3145482, while scan-free lower bound averages 2658276 but alignment MBU is dense",
+            blocker: "restoring-final model is under 2.7M and phase-clean in toy; scan-free select1 lower bound averages 2465688 with p99 2610296, but exact coefficient decode averages 3145482 and alignment MBU is dense",
         },
         Candidate {
             name: "direct_centered_signnorm_rank_compressed_signs",
@@ -281,10 +281,29 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let direct_restoring_final_coeff_decoder_augmented_pointadd_p99 = 3_380_788usize;
     let direct_restoring_final_coeff_decoder_augmented_gap = 680_788isize;
     let direct_restoring_final_avg_select3_mean = 2_480_906usize;
+    let direct_restoring_final_avg_select3_first64 = 2_486_059usize;
+    let direct_restoring_final_avg_select3_p99 = 2_638_276usize;
+    let direct_restoring_final_avg_decoder_exact_mean = 166_144usize;
+    let direct_restoring_final_avg_decoder_exact_p99 = 185_875usize;
+    let direct_restoring_final_avg_decoder_noscan_mean = 44_342usize;
+    let direct_restoring_final_avg_decoder_noscan_p99 = 47_094usize;
     let direct_restoring_final_avg_exact_select3_mean = 3_145_482usize;
+    let direct_restoring_final_avg_exact_select3_first64 = 3_152_638usize;
+    let direct_restoring_final_avg_exact_select3_p99 = 3_375_572usize;
     let direct_restoring_final_avg_exact_select3_gap =
         direct_restoring_final_avg_exact_select3_mean as isize - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
+    let direct_restoring_final_avg_noscan_select1_mean = 2_465_688usize;
+    let direct_restoring_final_avg_noscan_select1_first64 = 2_470_688usize;
+    let direct_restoring_final_avg_noscan_select1_p99 = 2_610_296usize;
+    let direct_restoring_final_avg_noscan_select1_gap =
+        direct_restoring_final_avg_noscan_select1_mean as isize - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
+    let direct_restoring_final_avg_noscan_select2_mean = 2_561_982usize;
+    let direct_restoring_final_avg_noscan_select2_first64 = 2_567_281usize;
+    let direct_restoring_final_avg_noscan_select2_p99 = 2_716_722usize;
+    let direct_restoring_final_avg_noscan_select2_gap =
+        direct_restoring_final_avg_noscan_select2_mean as isize - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
     let direct_restoring_final_avg_noscan_select3_mean = 2_658_276usize;
+    let direct_restoring_final_avg_noscan_select3_first64 = 2_663_875usize;
     let direct_restoring_final_avg_noscan_select3_gap =
         direct_restoring_final_avg_noscan_select3_mean as isize - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
     let direct_restoring_final_avg_noscan_select3_p99 = 2_823_264usize;
@@ -541,9 +560,26 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_direct_restoring_final_coeff_decoder_augmented_pointadd_p99={direct_restoring_final_coeff_decoder_augmented_pointadd_p99}");
     println!("METRIC scratch600_direct_restoring_final_coeff_decoder_augmented_gap_to_2700k={direct_restoring_final_coeff_decoder_augmented_gap}");
     println!("METRIC scratch600_direct_restoring_final_avg_select3_mean={direct_restoring_final_avg_select3_mean}");
+    println!("METRIC scratch600_direct_restoring_final_avg_select3_first64={direct_restoring_final_avg_select3_first64}");
+    println!("METRIC scratch600_direct_restoring_final_avg_select3_p99={direct_restoring_final_avg_select3_p99}");
+    println!("METRIC scratch600_direct_restoring_final_avg_decoder_exact_mean={direct_restoring_final_avg_decoder_exact_mean}");
+    println!("METRIC scratch600_direct_restoring_final_avg_decoder_exact_p99={direct_restoring_final_avg_decoder_exact_p99}");
+    println!("METRIC scratch600_direct_restoring_final_avg_decoder_noscan_mean={direct_restoring_final_avg_decoder_noscan_mean}");
+    println!("METRIC scratch600_direct_restoring_final_avg_decoder_noscan_p99={direct_restoring_final_avg_decoder_noscan_p99}");
     println!("METRIC scratch600_direct_restoring_final_avg_exact_select3_mean={direct_restoring_final_avg_exact_select3_mean}");
+    println!("METRIC scratch600_direct_restoring_final_avg_exact_select3_first64={direct_restoring_final_avg_exact_select3_first64}");
+    println!("METRIC scratch600_direct_restoring_final_avg_exact_select3_p99={direct_restoring_final_avg_exact_select3_p99}");
     println!("METRIC scratch600_direct_restoring_final_avg_exact_select3_gap_to_2700k={direct_restoring_final_avg_exact_select3_gap}");
+    println!("METRIC scratch600_direct_restoring_final_avg_noscan_select1_mean={direct_restoring_final_avg_noscan_select1_mean}");
+    println!("METRIC scratch600_direct_restoring_final_avg_noscan_select1_first64={direct_restoring_final_avg_noscan_select1_first64}");
+    println!("METRIC scratch600_direct_restoring_final_avg_noscan_select1_p99={direct_restoring_final_avg_noscan_select1_p99}");
+    println!("METRIC scratch600_direct_restoring_final_avg_noscan_select1_gap_to_2700k={direct_restoring_final_avg_noscan_select1_gap}");
+    println!("METRIC scratch600_direct_restoring_final_avg_noscan_select2_mean={direct_restoring_final_avg_noscan_select2_mean}");
+    println!("METRIC scratch600_direct_restoring_final_avg_noscan_select2_first64={direct_restoring_final_avg_noscan_select2_first64}");
+    println!("METRIC scratch600_direct_restoring_final_avg_noscan_select2_p99={direct_restoring_final_avg_noscan_select2_p99}");
+    println!("METRIC scratch600_direct_restoring_final_avg_noscan_select2_gap_to_2700k={direct_restoring_final_avg_noscan_select2_gap}");
     println!("METRIC scratch600_direct_restoring_final_avg_noscan_select3_mean={direct_restoring_final_avg_noscan_select3_mean}");
+    println!("METRIC scratch600_direct_restoring_final_avg_noscan_select3_first64={direct_restoring_final_avg_noscan_select3_first64}");
     println!("METRIC scratch600_direct_restoring_final_avg_noscan_select3_gap_to_2700k={direct_restoring_final_avg_noscan_select3_gap}");
     println!("METRIC scratch600_direct_restoring_final_avg_noscan_select3_p99={direct_restoring_final_avg_noscan_select3_p99}");
     println!("METRIC scratch600_direct_restoring_final_coeff_decoder_alignment_degree_n14={direct_restoring_final_coeff_decoder_alignment_degree_n14}");
@@ -784,9 +820,18 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     );
     assert!(
         direct_restoring_final_avg_exact_select3_gap > 0
+            && direct_restoring_final_avg_exact_select3_first64 > GOOGLE_LOW_QUBIT_TOFFOLI
+            && direct_restoring_final_avg_exact_select3_p99 > GOOGLE_LOW_QUBIT_TOFFOLI
+            && direct_restoring_final_avg_noscan_select1_gap < 0
+            && direct_restoring_final_avg_noscan_select1_first64 < GOOGLE_LOW_QUBIT_TOFFOLI
+            && direct_restoring_final_avg_noscan_select1_p99 < GOOGLE_LOW_QUBIT_TOFFOLI
+            && direct_restoring_final_avg_noscan_select2_gap < 0
+            && direct_restoring_final_avg_noscan_select2_first64 < GOOGLE_LOW_QUBIT_TOFFOLI
+            && direct_restoring_final_avg_noscan_select2_p99 > GOOGLE_LOW_QUBIT_TOFFOLI
             && direct_restoring_final_avg_noscan_select3_gap < 0
+            && direct_restoring_final_avg_noscan_select3_first64 < GOOGLE_LOW_QUBIT_TOFFOLI
             && direct_restoring_final_avg_noscan_select3_p99 > GOOGLE_LOW_QUBIT_TOFFOLI,
-        "restoring-final average gate changed; revisit exact decoder scan deletion"
+        "restoring-final average gate changed; revisit selector factor and scan-free decoder"
     );
     assert!(
         direct_restoring_final_coeff_decoder_alignment_degree_n14 + 1 >= 14
