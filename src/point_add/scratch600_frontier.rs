@@ -103,7 +103,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "direct_centered_signnorm_raw_digits_only",
             scratch_bits: 653,
             charged_toffoli: None,
-            blocker: "raw sign-normalized digits fit, but phase-clean exact cneg p99 is 2792914 and normalization-sign history is uncharged",
+            blocker: "raw sign-normalized digits fit, but phase-clean exact cneg p99 is 2792914 and normalization-sign history has dense MBU parity",
         },
         Candidate {
             name: "direct_centered_signnorm_rank_compressed_signs",
@@ -181,6 +181,9 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let direct_signnorm_exact_split_p99 = 2_792_914usize;
     let direct_signnorm_exact_split_gap =
         direct_signnorm_exact_split_p99 as isize - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
+    let direct_signnorm_mbu_degree_n14 = 13usize;
+    let direct_signnorm_mbu_density_n14 = 8_208usize;
+    let direct_signnorm_mbu_max_count_n14 = 8usize;
     let plusminus_raw_scratch = 564usize;
     let plusminus_unary_scratch_p99 = 640usize;
     let plusminus_parser_over_strict = plusminus_unary_scratch_p99 - STRICT_SCRATCH;
@@ -274,6 +277,9 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_direct_signnorm_ambiguous_rank_over_google_bits={direct_signnorm_ambiguous_rank_over_google}");
     println!("METRIC scratch600_direct_signnorm_exact_split_p99={direct_signnorm_exact_split_p99}");
     println!("METRIC scratch600_direct_signnorm_exact_split_gap_to_2700k={direct_signnorm_exact_split_gap}");
+    println!("METRIC scratch600_direct_signnorm_mbu_degree_n14={direct_signnorm_mbu_degree_n14}");
+    println!("METRIC scratch600_direct_signnorm_mbu_density_n14={direct_signnorm_mbu_density_n14}");
+    println!("METRIC scratch600_direct_signnorm_mbu_max_count_n14={direct_signnorm_mbu_max_count_n14}");
     println!("METRIC scratch600_plusminus_raw_scratch_bits={plusminus_raw_scratch}");
     println!("METRIC scratch600_plusminus_unary_scratch_p99={plusminus_unary_scratch_p99}");
     println!("METRIC scratch600_plusminus_parser_over_strict_bits={plusminus_parser_over_strict}");
@@ -334,6 +340,12 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     assert!(
         direct_signnorm_exact_split_gap > 0,
         "phase-clean exact sign normalization should not be counted as p99 low-qubit solved"
+    );
+    assert!(
+        direct_signnorm_mbu_degree_n14 + 1 >= 14
+            && direct_signnorm_mbu_density_n14 > (1usize << 14) / 4
+            && direct_signnorm_mbu_max_count_n14 > 4,
+        "normalization-sign MBU parity changed; revisit sign-normalized direct route"
     );
     assert!(halfgcd_tail_over_google > 0, "half-GCD checkpoint must be fused before it fits");
     assert!(

@@ -13370,6 +13370,32 @@ mod tests {
     }
 
     #[test]
+    fn direct_centered_signnorm_normalization_sign_mbu_is_dense_too() {
+        // The sign-normalized direct-centered route keeps quotient signs on the
+        // phase-clean q_neg=false path by recording when the centered remainder
+        // was negated.  Those normalization signs are the remaining side
+        // channel.  A generic MBUC parity is already high-degree and dense on
+        // toy fields, so this is not a cheap cleanup primitive.
+        let cases = [(8usize, 251u16), (10, 1021), (12, 4093), (14, 16381)];
+        for &(n, p) in &cases {
+            let (degree, density, max_norm_count) =
+                direct_centered_signnorm_normalization_parity_anf_stats(n, p);
+            let table = 1usize << n;
+            eprintln!(
+                "direct-centered signnorm normalization parity ANF: n={n}, degree={degree}, density={density}/{table}, max_norm_count={max_norm_count}"
+            );
+            if n == 14 {
+                println!("METRIC centered_direct_signnorm_mbu_degree_n14={degree}");
+                println!("METRIC centered_direct_signnorm_mbu_density_n14={density}");
+                println!("METRIC centered_direct_signnorm_mbu_max_count_n14={max_norm_count}");
+            }
+            assert!(max_norm_count > n / 3, "toy field stopped exercising normalization signs");
+            assert!(degree + 1 >= n, "normalization-sign parity unexpectedly low degree");
+            assert!(density > table / 4, "normalization-sign parity unexpectedly sparse");
+        }
+    }
+
+    #[test]
     fn euclid_quotient_stream_entropy_also_exceeds_scratch600() {
         // Follow-up to the raw-payload quotient-stream DIV test.  The tempting
         // objection is that a clever prefix/arithmetic code could pack the
@@ -13687,6 +13713,50 @@ mod tests {
             .max()
             .unwrap_or(0);
         (degree, density, max_digit_payload)
+    }
+
+    fn direct_centered_signnorm_normalization_parity_anf_stats(
+        n: usize,
+        p: u16,
+    ) -> (usize, usize, usize) {
+        let size = 1usize << n;
+        let mut anf = vec![0u8; size];
+        let mut max_norm_count = 0usize;
+        for x in 1..p {
+            let mut u = p as i128;
+            let mut v = x as i128;
+            let mut parity = 0u8;
+            let mut norm_count = 0usize;
+            while v != 0 {
+                let adjusted = u + (v >> 1);
+                let q = adjusted / v;
+                let mut rem = u - q * v;
+                if rem < 0 {
+                    parity ^= 1;
+                    norm_count += 1;
+                    rem = -rem;
+                }
+                u = v;
+                v = rem;
+            }
+            max_norm_count = max_norm_count.max(norm_count);
+            anf[x as usize] = parity;
+        }
+        for bit in 0..n {
+            for idx in 0..size {
+                if (idx & (1usize << bit)) != 0 {
+                    anf[idx] ^= anf[idx ^ (1usize << bit)];
+                }
+            }
+        }
+        let density = anf.iter().filter(|&&c| c != 0).count();
+        let degree = anf
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &c)| if c != 0 { Some(i.count_ones() as usize) } else { None })
+            .max()
+            .unwrap_or(0);
+        (degree, density, max_norm_count)
     }
 
     fn euclid_quotient_payload_parity_anf_stats(n: usize, p: u16) -> (usize, usize) {
