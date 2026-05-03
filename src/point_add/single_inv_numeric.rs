@@ -17649,6 +17649,190 @@ mod tests {
     }
 
     #[test]
+    fn direct_centered_restoring_final_alignment_public_len_predictor_still_needs_sidecar() {
+        // The raw variable alignment stream fits only if the parser knows each
+        // per-step payload length.  Give the parser a very generous public
+        // helper: a per-step modal alignment-length schedule trained from
+        // independent samples.  If the rank of the remaining mismatch positions
+        // already exceeds the scratch budget, then a simple public taper plus
+        // small correction channel cannot be the missing packed parser.
+        let p = SECP256K1_P;
+        let n = 256usize;
+        let train_samples = 8192usize;
+        let eval_samples = 8192usize;
+        const MAX_STEPS: usize = 260;
+        const MAX_ALIGN_LEN: usize = 8;
+        let mut rng = 0xd1ce_c0ef_a119_1001u64;
+        let trace_align_lengths = |rng: &mut u64| -> (Vec<usize>, usize, usize) {
+            let mut x = rand_u256(rng);
+            if x.is_zero() {
+                x = U256::from(1u64);
+            }
+            let mut u = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(p));
+            let mut v = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(x));
+            let mut coeff_u = smag_for_halfgcd_test(false, U512::ZERO);
+            let mut coeff_v = smag_for_halfgcd_test(false, U512::from(1u64));
+            let mut align_lens = Vec::new();
+            let mut align_variable_bits = 0usize;
+            let mut ambiguous_branches = 0usize;
+            while !v.mag.is_zero() {
+                let adjusted = u.mag + (v.mag >> 1usize);
+                let q_direct = adjusted / v.mag;
+                let q_neg = u.neg ^ v.neg;
+                let qv = signed_mul_mag_for_halfgcd_test(v, q_neg, q_direct);
+                let next_v = signed_add_for_halfgcd_test(u, signed_neg_for_halfgcd_test(qv));
+                let qv_coeff = signed_mul_mag_for_halfgcd_test(coeff_v, q_neg, q_direct);
+                let next_coeff_v = signed_add_for_halfgcd_test(
+                    coeff_u,
+                    signed_neg_for_halfgcd_test(qv_coeff),
+                );
+                let denom = coeff_v.mag;
+                assert!(!denom.is_zero(), "restoring-final coefficient denominator vanished");
+                let low_numer = if coeff_u.mag.is_zero() {
+                    next_coeff_v.mag
+                } else {
+                    assert!(
+                        !next_coeff_v.mag.is_zero(),
+                        "restoring-final adjusted coefficient numerator underflow"
+                    );
+                    next_coeff_v.mag - U512::from(1u64)
+                };
+                let high_numer = if coeff_u.mag.is_zero() {
+                    low_numer
+                } else {
+                    next_coeff_v.mag + denom - U512::from(1u64)
+                };
+                let low_q = low_numer / denom;
+                let high_q = high_numer / denom;
+                let numer = if q_direct == low_q {
+                    low_numer
+                } else {
+                    assert_eq!(
+                        q_direct, high_q,
+                        "restoring-final coefficient reverse quotient candidates missed"
+                    );
+                    high_numer
+                };
+                let ambiguous = low_q != high_q;
+                ambiguous_branches += ambiguous as usize;
+                let alignment = u512_bit_len_for_halfgcd_test(numer)
+                    .saturating_sub(u512_bit_len_for_halfgcd_test(denom));
+                let align_len = usize_bit_len_for_payload_test(alignment);
+                assert!(align_len <= MAX_ALIGN_LEN, "alignment length exceeded 8 bits");
+                align_variable_bits += align_len;
+                align_lens.push(align_len);
+
+                u = v;
+                v = next_v;
+                coeff_u = coeff_v;
+                coeff_v = next_coeff_v;
+            }
+            assert_eq!(u.mag, U512::from(1u64), "restoring-final trace ended at non-unit gcd");
+            (align_lens, align_variable_bits, ambiguous_branches)
+        };
+
+        let mut step_len_counts = [[0usize; MAX_ALIGN_LEN + 1]; MAX_STEPS];
+        let mut train_counts = Vec::with_capacity(train_samples);
+        for _ in 0..train_samples {
+            let (align_lens, _, _) = trace_align_lengths(&mut rng);
+            assert!(align_lens.len() < MAX_STEPS, "trace exceeded public predictor table");
+            train_counts.push(align_lens.len());
+            for (step, &align_len) in align_lens.iter().enumerate() {
+                step_len_counts[step][align_len] += 1;
+            }
+        }
+        let mut public_len = [0usize; MAX_STEPS];
+        for step in 0..MAX_STEPS {
+            let mut best_len = 0usize;
+            let mut best_count = 0usize;
+            for len in 0..=MAX_ALIGN_LEN {
+                if step_len_counts[step][len] > best_count {
+                    best_count = step_len_counts[step][len];
+                    best_len = len;
+                }
+            }
+            public_len[step] = best_len;
+        }
+
+        let log2_binomial_ceil = |items: usize, chosen: usize| -> usize {
+            let chosen = chosen.min(items - chosen);
+            let mut acc = 0.0f64;
+            for i in 1..=chosen {
+                acc += ((items + 1 - i) as f64).log2() - (i as f64).log2();
+            }
+            acc.ceil() as usize
+        };
+        let mut eval_counts = Vec::with_capacity(eval_samples);
+        let mut variable_scratches = Vec::with_capacity(eval_samples);
+        let mut mismatch_counts = Vec::with_capacity(eval_samples);
+        let mut mismatch_position_ranks = Vec::with_capacity(eval_samples);
+        let mut position_only_scratches = Vec::with_capacity(eval_samples);
+        let mut position_plus_len_scratches = Vec::with_capacity(eval_samples);
+        for _ in 0..eval_samples {
+            let (align_lens, align_variable_bits, ambiguous_branches) =
+                trace_align_lengths(&mut rng);
+            let count = align_lens.len();
+            assert!(count < MAX_STEPS, "trace exceeded public predictor table");
+            let mismatch_count = align_lens
+                .iter()
+                .enumerate()
+                .filter(|&(step, &align_len)| public_len[step] != align_len)
+                .count();
+            let variable_scratch = n + align_variable_bits + ambiguous_branches;
+            let mismatch_rank = log2_binomial_ceil(count, mismatch_count);
+            let position_only_scratch = variable_scratch + mismatch_rank;
+            let position_plus_len_scratch =
+                position_only_scratch + 3usize * mismatch_count;
+            eval_counts.push(count);
+            variable_scratches.push(variable_scratch);
+            mismatch_counts.push(mismatch_count);
+            mismatch_position_ranks.push(mismatch_rank);
+            position_only_scratches.push(position_only_scratch);
+            position_plus_len_scratches.push(position_plus_len_scratch);
+        }
+
+        let p99_usize = |rows: &mut Vec<usize>| -> usize {
+            rows.sort_unstable();
+            rows[rows.len() * 99 / 100]
+        };
+        let train_count_p99 = p99_usize(&mut train_counts);
+        let train_count_max = *train_counts.last().unwrap();
+        let eval_count_p99 = p99_usize(&mut eval_counts);
+        let eval_count_max = *eval_counts.last().unwrap();
+        let variable_scratch_p99 = p99_usize(&mut variable_scratches);
+        let variable_scratch_max = *variable_scratches.last().unwrap();
+        let mismatch_count_p99 = p99_usize(&mut mismatch_counts);
+        let mismatch_count_max = *mismatch_counts.last().unwrap();
+        let mismatch_position_rank_p99 = p99_usize(&mut mismatch_position_ranks);
+        let mismatch_position_rank_max = *mismatch_position_ranks.last().unwrap();
+        let position_only_scratch_p99 = p99_usize(&mut position_only_scratches);
+        let position_only_scratch_max = *position_only_scratches.last().unwrap();
+        let position_plus_len_scratch_p99 = p99_usize(&mut position_plus_len_scratches);
+        let position_plus_len_scratch_max = *position_plus_len_scratches.last().unwrap();
+        println!("METRIC centered_direct_restoring_final_align_public_len_train_count_p99={train_count_p99}");
+        println!("METRIC centered_direct_restoring_final_align_public_len_train_count_max={train_count_max}");
+        println!("METRIC centered_direct_restoring_final_align_public_len_eval_count_p99={eval_count_p99}");
+        println!("METRIC centered_direct_restoring_final_align_public_len_eval_count_max={eval_count_max}");
+        println!("METRIC centered_direct_restoring_final_align_public_len_variable_scratch_p99={variable_scratch_p99}");
+        println!("METRIC centered_direct_restoring_final_align_public_len_variable_scratch_max={variable_scratch_max}");
+        println!("METRIC centered_direct_restoring_final_align_public_len_mismatch_count_p99={mismatch_count_p99}");
+        println!("METRIC centered_direct_restoring_final_align_public_len_mismatch_count_max={mismatch_count_max}");
+        println!("METRIC centered_direct_restoring_final_align_public_len_position_rank_p99={mismatch_position_rank_p99}");
+        println!("METRIC centered_direct_restoring_final_align_public_len_position_rank_max={mismatch_position_rank_max}");
+        println!("METRIC centered_direct_restoring_final_align_public_len_position_only_scratch_p99={position_only_scratch_p99}");
+        println!("METRIC centered_direct_restoring_final_align_public_len_position_only_scratch_max={position_only_scratch_max}");
+        println!("METRIC centered_direct_restoring_final_align_public_len_position_plus3_scratch_p99={position_plus_len_scratch_p99}");
+        println!("METRIC centered_direct_restoring_final_align_public_len_position_plus3_scratch_max={position_plus_len_scratch_max}");
+        eprintln!(
+            "Direct-centered restoring-final public length predictor: variable_p99={variable_scratch_p99}, mismatches_p99={mismatch_count_p99}, rank_p99={mismatch_position_rank_p99}, position_only_p99={position_only_scratch_p99}, position_plus3_p99={position_plus_len_scratch_p99}"
+        );
+        assert!(
+            position_only_scratch_p99 > 663,
+            "public modal alignment lengths plus ideal mismatch positions fit; promote predictor parser"
+        );
+    }
+
+    #[test]
     fn direct_centered_signnorm_normalization_sign_mbu_is_dense_too() {
         // The sign-normalized direct-centered route keeps quotient signs on the
         // phase-clean q_neg=false path by recording when the centered remainder

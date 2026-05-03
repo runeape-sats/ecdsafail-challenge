@@ -121,7 +121,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "direct_centered_restoring_final_stored_alignment",
             scratch_bits: 602,
             charged_toffoli: None,
-            blocker: "restoring-final select1 now has phase-clean toy cleanup; stored alignment+branch decoder averages 2645270 with raw variable metadata p99 602, but delimited/gamma/length-rank metadata is 719/809/748 and exact packed parser/cleanup is unbuilt",
+            blocker: "restoring-final select1 now has phase-clean toy cleanup; stored alignment+branch decoder averages 2645270 with raw variable metadata p99 602, but delimited/gamma/length-rank metadata is 719/809/748 and modal public-length correction is 706/840, so exact packed parser/cleanup is unbuilt",
         },
         Candidate {
             name: "direct_centered_signnorm_rank_compressed_signs",
@@ -327,6 +327,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let direct_restoring_final_stored_align_gamma_scratch_p99 = 809usize;
     let direct_restoring_final_stored_align_length_rank_scratch_p99 = 748usize;
     let direct_restoring_final_stored_align_length_rank_scratch_max = 769usize;
+    let direct_restoring_final_stored_align_public_len_mismatch_p99 = 50usize;
+    let direct_restoring_final_stored_align_public_len_rank_p99 = 109usize;
+    let direct_restoring_final_stored_align_public_len_position_only_p99 = 706usize;
+    let direct_restoring_final_stored_align_public_len_position_plus3_p99 = 840usize;
     let direct_restoring_final_stored_align_pop_barrel_p99 = 19_928usize;
     let direct_restoring_final_stored_align_branch_select_p99 = 31_033usize;
     let direct_restoring_final_stored_align_branch_count_p99 = 117usize;
@@ -623,6 +627,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_direct_restoring_final_stored_align_gamma_scratch_p99={direct_restoring_final_stored_align_gamma_scratch_p99}");
     println!("METRIC scratch600_direct_restoring_final_stored_align_length_rank_scratch_p99={direct_restoring_final_stored_align_length_rank_scratch_p99}");
     println!("METRIC scratch600_direct_restoring_final_stored_align_length_rank_scratch_max={direct_restoring_final_stored_align_length_rank_scratch_max}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_public_len_mismatch_p99={direct_restoring_final_stored_align_public_len_mismatch_p99}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_public_len_rank_p99={direct_restoring_final_stored_align_public_len_rank_p99}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_public_len_position_only_p99={direct_restoring_final_stored_align_public_len_position_only_p99}");
+    println!("METRIC scratch600_direct_restoring_final_stored_align_public_len_position_plus3_p99={direct_restoring_final_stored_align_public_len_position_plus3_p99}");
     println!("METRIC scratch600_direct_restoring_final_stored_align_pop_barrel_p99={direct_restoring_final_stored_align_pop_barrel_p99}");
     println!("METRIC scratch600_direct_restoring_final_stored_align_branch_select_p99={direct_restoring_final_stored_align_branch_select_p99}");
     println!("METRIC scratch600_direct_restoring_final_stored_align_branch_count_p99={direct_restoring_final_stored_align_branch_count_p99}");
@@ -897,6 +905,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
                 > GOOGLE_LOW_QUBIT_SCRATCH
             && direct_restoring_final_stored_align_gamma_scratch_p99 > GOOGLE_LOW_QUBIT_SCRATCH
             && direct_restoring_final_stored_align_length_rank_scratch_p99
+                > GOOGLE_LOW_QUBIT_SCRATCH
+            && direct_restoring_final_stored_align_public_len_position_only_p99
+                > GOOGLE_LOW_QUBIT_SCRATCH
+            && direct_restoring_final_stored_align_public_len_position_plus3_p99
                 > GOOGLE_LOW_QUBIT_SCRATCH,
         "restoring-final stored-alignment metadata changed; revisit exact parser/packing blocker"
     );
