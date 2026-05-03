@@ -109,7 +109,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "halfgcd_det_compressed_matrix_tail_payload",
             scratch_bits: 564,
             charged_toffoli: None,
-            blocker: "determinant-compressed matrix+tail payload fits; arithmetic replay plus an optimistic recovery floor projects 1410512, but phase-clean matrix extraction and cleanup are uncharged",
+            blocker: "determinant-compressed matrix+tail payload fits and compressed tail schedule peaks at 646 bits, but straight-line prefix generation needs 769 bits; phase-clean in-loop checkpoint compression/extraction is uncharged",
         },
         Candidate {
             name: "folded_kaliski_one_pair_plus_required_sidecar",
@@ -184,6 +184,13 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let halfgcd_replay_with_recovery_floor_pointadd_p99 = 1_410_512usize;
     let halfgcd_replay_with_recovery_floor_gap_to_2700k =
         halfgcd_replay_with_recovery_floor_pointadd_p99 as isize - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
+    let halfgcd_full_prefix_live_p99_bits = 769usize;
+    let halfgcd_full_prefix_live_gap_google =
+        halfgcd_full_prefix_live_p99_bits as isize - GOOGLE_LOW_QUBIT_SCRATCH as isize;
+    let halfgcd_compressed_residual_live_p99_bits = 646usize;
+    let halfgcd_compressed_tail_stream_peak_p99_bits = 646usize;
+    let halfgcd_compressed_tail_stream_peak_gap_google =
+        halfgcd_compressed_tail_stream_peak_p99_bits as isize - GOOGLE_LOW_QUBIT_SCRATCH as isize;
 
     eprintln!("\nScratch-600 architecture frontier:");
     for c in candidates {
@@ -250,6 +257,11 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_halfgcd_det_recovery_floor_p99_ccx={halfgcd_det_recovery_floor_p99_ccx}");
     println!("METRIC scratch600_halfgcd_replay_with_recovery_floor_pointadd_p99={halfgcd_replay_with_recovery_floor_pointadd_p99}");
     println!("METRIC scratch600_halfgcd_replay_with_recovery_floor_gap_to_2700k={halfgcd_replay_with_recovery_floor_gap_to_2700k}");
+    println!("METRIC scratch600_halfgcd_full_prefix_live_p99_bits={halfgcd_full_prefix_live_p99_bits}");
+    println!("METRIC scratch600_halfgcd_full_prefix_live_gap_google={halfgcd_full_prefix_live_gap_google}");
+    println!("METRIC scratch600_halfgcd_compressed_residual_live_p99_bits={halfgcd_compressed_residual_live_p99_bits}");
+    println!("METRIC scratch600_halfgcd_compressed_tail_stream_peak_p99_bits={halfgcd_compressed_tail_stream_peak_p99_bits}");
+    println!("METRIC scratch600_halfgcd_compressed_tail_stream_peak_gap_google={halfgcd_compressed_tail_stream_peak_gap_google}");
 
     assert!(best_state <= STRICT_SCRATCH, "at least some state shapes fit");
     assert!(streamed_gap_to_google > 0, "no fully charged <=600-scratch row should be counted as solved yet");
@@ -283,5 +295,9 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     assert!(
         halfgcd_replay_with_recovery_floor_gap_to_2700k < 0,
         "half-GCD arithmetic replay floor changed; update matrix-extraction blocker"
+    );
+    assert!(
+        halfgcd_full_prefix_live_gap_google > 0 && halfgcd_compressed_tail_stream_peak_gap_google <= 0,
+        "half-GCD checkpoint extraction schedule changed; update prefix-compression blocker"
     );
 }

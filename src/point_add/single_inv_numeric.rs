@@ -3719,6 +3719,113 @@ mod tests {
     }
 
     #[test]
+    fn half_gcd_compressed_tail_schedule_still_needs_checkpoint_extraction_breakthrough() {
+        // The compressed payload/replay arithmetic fits only after the prefix
+        // checkpoint has been compressed.  A straightforward prefix generator
+        // must keep four matrix entries plus the live residual pair.  Price the
+        // peak before compression, then price the hypothetical schedule after
+        // the omitted entry has been erased and tail bits stream into the space
+        // vacated by the shrinking residual.
+        let p = SECP256K1_P;
+        let samples = 2048usize;
+        let mut rng = 0xc1ea_0017_5c4e_d001u64;
+        let mut full_prefix_live = Vec::with_capacity(samples);
+        let mut compressed_residual_live = Vec::with_capacity(samples);
+        let mut compressed_tail_stream_peak = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() { x = U256::from(1u64); }
+            let mut u = p;
+            let mut v = x;
+            let mut a = smag_for_halfgcd_test(false, U512::from(1u64));
+            let mut b = smag_for_halfgcd_test(false, U512::ZERO);
+            let mut c = smag_for_halfgcd_test(false, U512::ZERO);
+            let mut d = smag_for_halfgcd_test(false, U512::from(1u64));
+            while !v.is_zero() && u256_bit_len(u).max(u256_bit_len(v)) > 128 {
+                let q = u / v;
+                let rem = u - q * v;
+                let na = c;
+                let nb = d;
+                let nc = signed_sub_scaled_for_halfgcd_test(a, q, c);
+                let nd = signed_sub_scaled_for_halfgcd_test(b, q, d);
+                u = v;
+                v = rem;
+                a = na;
+                b = nb;
+                c = nc;
+                d = nd;
+            }
+
+            let entries = [a, b, c, d];
+            let entry_mag_bits = |z: SignedMagU512ForHalfGcdTest| {
+                u512_bit_len_for_halfgcd_test(z.mag)
+            };
+            let entry_stored_bits = |z: SignedMagU512ForHalfGcdTest| {
+                entry_mag_bits(z) + (!z.mag.is_zero()) as usize
+            };
+            let full_matrix_bits = entries.iter().map(|&z| entry_mag_bits(z)).sum::<usize>();
+            let residual_bits = u256_bit_len(u) + u256_bit_len(v);
+            full_prefix_live.push(full_matrix_bits + residual_bits);
+
+            let denoms = [d.mag, c.mag, b.mag, a.mag];
+            let mut best_compressed: Option<usize> = None;
+            for omit in 0..4 {
+                if denoms[omit].is_zero() {
+                    continue;
+                }
+                let stored = (0..4)
+                    .filter(|&i| i != omit)
+                    .map(|i| entry_stored_bits(entries[i]))
+                    .sum::<usize>()
+                    + 3; // omitted selector plus determinant sign.
+                best_compressed = Some(best_compressed.map_or(stored, |old| old.min(stored)));
+            }
+            let compressed_matrix_bits =
+                best_compressed.expect("at least one determinant denominator should be nonzero");
+            compressed_residual_live.push(compressed_matrix_bits + residual_bits);
+
+            let mut tail_payload = 0usize;
+            let mut tu = u;
+            let mut tv = v;
+            let mut peak = compressed_matrix_bits + u256_bit_len(tu) + u256_bit_len(tv);
+            while !tv.is_zero() {
+                let q = tu / tv;
+                tail_payload += u256_bit_len(q);
+                let rem = tu - q * tv;
+                tu = tv;
+                tv = rem;
+                peak = peak.max(compressed_matrix_bits + u256_bit_len(tu) + u256_bit_len(tv) + tail_payload);
+            }
+            compressed_tail_stream_peak.push(peak);
+        }
+        full_prefix_live.sort_unstable();
+        compressed_residual_live.sort_unstable();
+        compressed_tail_stream_peak.sort_unstable();
+        let p99 = samples * 99 / 100;
+        let full_prefix_p99 = full_prefix_live[p99];
+        let compressed_residual_p99 = compressed_residual_live[p99];
+        let compressed_tail_peak_p99 = compressed_tail_stream_peak[p99];
+        let full_prefix_gap_google = full_prefix_p99 as isize - 663isize;
+        let compressed_tail_peak_gap_google = compressed_tail_peak_p99 as isize - 663isize;
+        eprintln!(
+            "half-GCD compressed schedule: full_prefix_p99={full_prefix_p99}, compressed_residual_p99={compressed_residual_p99}, compressed_tail_peak_p99={compressed_tail_peak_p99}, full_gap={full_prefix_gap_google}, compressed_tail_gap={compressed_tail_peak_gap_google}"
+        );
+        println!("METRIC halfgcd_full_prefix_live_p99_bits={full_prefix_p99}");
+        println!("METRIC halfgcd_full_prefix_live_gap_google={full_prefix_gap_google}");
+        println!("METRIC halfgcd_compressed_residual_live_p99_bits={compressed_residual_p99}");
+        println!("METRIC halfgcd_compressed_tail_stream_peak_p99_bits={compressed_tail_peak_p99}");
+        println!("METRIC halfgcd_compressed_tail_stream_peak_gap_google={compressed_tail_peak_gap_google}");
+        assert!(
+            full_prefix_gap_google > 0,
+            "straight-line half-GCD prefix generation unexpectedly fits Google scratch"
+        );
+        assert!(
+            compressed_tail_peak_gap_google <= 0,
+            "compressed half-GCD tail streaming no longer fits after checkpoint compression"
+        );
+    }
+
+    #[test]
     fn plusminus_exponent_only_denominator_normalization_is_not_exact() {
         // Maybe normalization can be controlled by the stored offset exponent
         // without a dense bitlength oracle.  Test the best public threshold on
