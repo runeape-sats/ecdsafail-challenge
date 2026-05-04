@@ -10621,6 +10621,222 @@ mod tests {
     }
 
     #[test]
+    fn half_gcd_full_block_endpoint_rank_payload_parity_is_dense() {
+        // The two-bit endpoint rank keeps the source channel small, but a
+        // generic compute/use/uncompute sidecar is only useful if those rank
+        // bits have cheap phase-clean structure.  Treat the packed rank stream
+        // as a hidden payload on exact toy domains and interpolate parity
+        // probes over the input x.  Dense, growing-degree ANFs mean endpoint
+        // rank cleanup is still a real parser problem, not a free sidecar.
+        use std::collections::{BTreeMap, BTreeSet};
+
+        type LocalKey = (usize, u8, u128);
+
+        fn local_bits(
+            x0: SignedMagU512ForHalfGcdTest,
+            x1: SignedMagU512ForHalfGcdTest,
+            block_idx: usize,
+            block: usize,
+        ) -> u128 {
+            let mut word = 0u128;
+            let base = block_idx * block;
+            for offset in 0..block {
+                let bit = base + offset;
+                let b0 = if bit >= 512 {
+                    0
+                } else {
+                    ((x0.mag >> bit).as_limbs()[0] & 1) as u128
+                };
+                let b1 = if bit >= 512 {
+                    0
+                } else {
+                    ((x1.mag >> bit).as_limbs()[0] & 1) as u128
+                };
+                word |= b0 << (2 * offset);
+                word |= b1 << (2 * offset + 1);
+            }
+            word
+        }
+
+        let endpoint_state = |block_idx: usize, block_start_states: &[u8]| -> u8 {
+            block_start_states
+                .get(block_idx + 1)
+                .copied()
+                .unwrap_or(4)
+        };
+        let payload_for = |x: u32,
+                           p: u32,
+                           depth: usize,
+                           block: usize,
+                           endpoint_rows: &BTreeMap<LocalKey, BTreeSet<u8>>|
+         -> (u128, usize, usize) {
+            if x == 0 || x >= p {
+                return (0, 0, 0);
+            }
+            let (b, d) = halfgcd_second_column_after_fixed_depth_for_test(
+                U256::from(x as u64),
+                U256::from(p as u64),
+                depth,
+            );
+            let (_, _, _, _, _, _, _, digit_patterns, block_start_states) =
+                halfgcd_signed_two_coeff_apply_block_active_trace_for_test(b, d, block);
+            let mut payload = 0u128;
+            let mut payload_bits = 0usize;
+            let mut max_rank = 0usize;
+            for (block_idx, &pattern) in digit_patterns.iter().enumerate() {
+                if pattern == 0 {
+                    continue;
+                }
+                let key = (
+                    block_idx,
+                    block_start_states[block_idx],
+                    local_bits(b, d, block_idx, block),
+                );
+                let endpoints = endpoint_rows
+                    .get(&key)
+                    .expect("rank payload key missing from endpoint support");
+                let endpoint = endpoint_state(block_idx, &block_start_states);
+                let rank = endpoints
+                    .iter()
+                    .position(|&candidate| candidate == endpoint)
+                    .expect("traced endpoint missing from endpoint support");
+                max_rank = max_rank.max(rank);
+                payload |= (rank as u128) << payload_bits;
+                payload_bits += 2;
+            }
+            (payload, payload_bits, max_rank)
+        };
+        let anf_stats = |n: usize,
+                         p: u32,
+                         block: usize,
+                         mask: u128|
+         -> (usize, usize, usize, usize) {
+            let depth = (n / 4).max(1);
+            let mut endpoint_rows = BTreeMap::<LocalKey, BTreeSet<u8>>::new();
+            for x in 1..p {
+                let (b, d) = halfgcd_second_column_after_fixed_depth_for_test(
+                    U256::from(x as u64),
+                    U256::from(p as u64),
+                    depth,
+                );
+                let (_, _, _, _, _, _, _, digit_patterns, block_start_states) =
+                    halfgcd_signed_two_coeff_apply_block_active_trace_for_test(
+                        b, d, block,
+                    );
+                for (block_idx, &pattern) in digit_patterns.iter().enumerate() {
+                    if pattern == 0 {
+                        continue;
+                    }
+                    let key = (
+                        block_idx,
+                        block_start_states[block_idx],
+                        local_bits(b, d, block_idx, block),
+                    );
+                    endpoint_rows
+                        .entry(key)
+                        .or_default()
+                        .insert(endpoint_state(block_idx, &block_start_states));
+                }
+            }
+
+            let size = 1usize << n;
+            let mut anf = vec![0u8; size];
+            let mut max_payload_bits = 0usize;
+            let mut max_rank = 0usize;
+            for x in 1..p {
+                let (payload, payload_bits, rank) =
+                    payload_for(x, p, depth, block, &endpoint_rows);
+                anf[x as usize] = ((payload & mask).count_ones() & 1) as u8;
+                max_payload_bits = max_payload_bits.max(payload_bits);
+                max_rank = max_rank.max(rank);
+            }
+            for bit in 0..n {
+                for idx in 0..size {
+                    if (idx & (1usize << bit)) != 0 {
+                        anf[idx] ^= anf[idx ^ (1usize << bit)];
+                    }
+                }
+            }
+            let density = anf.iter().filter(|&&c| c != 0).count();
+            let degree = anf
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, &c)| {
+                    if c != 0 {
+                        Some(idx.count_ones() as usize)
+                    } else {
+                        None
+                    }
+                })
+                .max()
+                .unwrap_or(0);
+            (degree, density, max_payload_bits, max_rank)
+        };
+
+        let cases = [
+            (10usize, 1_021u32, 2usize, 0b10_1101u128),
+            (12usize, 4_093u32, 3usize, 0b1011_0101u128),
+            (14usize, 16_381u32, 4usize, 0b10_1101_0111u128),
+        ];
+        let mut n14_degree = 0usize;
+        let mut n14_density = 0usize;
+        let mut n14_payload_bits = 0usize;
+        let mut n14_max_rank = 0usize;
+        for &(n, p, block, mask) in &cases {
+            let (degree, density, max_payload_bits, max_rank) =
+                anf_stats(n, p, block, mask);
+            let table = 1usize << n;
+            println!(
+                "METRIC halfgcd_full_block_endpoint_rank_payload_parity_degree_n{n}={degree}"
+            );
+            println!(
+                "METRIC halfgcd_full_block_endpoint_rank_payload_parity_density_n{n}={density}"
+            );
+            println!(
+                "METRIC halfgcd_full_block_endpoint_rank_payload_max_bits_n{n}={max_payload_bits}"
+            );
+            println!(
+                "METRIC halfgcd_full_block_endpoint_rank_payload_max_rank_n{n}={max_rank}"
+            );
+            eprintln!(
+                "half-GCD endpoint rank payload parity: n={n}, degree={degree}, density={density}/{table}, max_bits={max_payload_bits}, max_rank={max_rank}"
+            );
+            assert!(max_rank <= 3, "endpoint branch rank escaped two bits");
+            assert!(
+                degree + 1 >= n,
+                "endpoint rank payload parity unexpectedly became low degree"
+            );
+            assert!(
+                density > table / 4,
+                "endpoint rank payload parity unexpectedly sparse"
+            );
+            if n == 14 {
+                n14_degree = degree;
+                n14_density = density;
+                n14_payload_bits = max_payload_bits;
+                n14_max_rank = max_rank;
+            }
+        }
+
+        assert_eq!(
+            n14_degree, 13,
+            "n14 endpoint-rank payload degree changed; update parser ledger"
+        );
+        assert_eq!(
+            n14_density, 8_178,
+            "n14 endpoint-rank payload density changed; update parser ledger"
+        );
+        assert_eq!(
+            n14_payload_bits, 8,
+            "n14 endpoint-rank payload size changed; update parser ledger"
+        );
+        assert_eq!(
+            n14_max_rank, 3,
+            "n14 endpoint-rank maximum rank changed; update parser ledger"
+        );
+    }
+
+    #[test]
     fn half_gcd_full_block_endpoint_rank_splits_by_coeff_carry_in_toys() {
         // A two-bit arbitrary rank is still a decoder table unless those bits
         // have carry meaning.  Check the stronger structural premise: for each

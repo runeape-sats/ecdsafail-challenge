@@ -301,7 +301,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "halfgcd_second_column_full_block_endpoint_rank_decoder_opening",
             scratch_bits: 539,
             charged_toffoli: None,
-            blocker: "the outgoing endpoint value can be compressed to a two-bit branch rank per active b32 block: exact n10/n12/n14/n16/n17 toys have at most 4 compatible endpoint/pattern branches per local key, and each coefficient lane has at most two outgoing carry values. A local min-cost endpoint DP reproduces every traced active block in the 4096 secp sample and exact toys (16202 sample blocks, 299013 toy blocks, 0 mismatches), so this is an algorithmic decoder shape rather than pure support lookup. The secp rank-source projection is 2659620 (-40380). The DP choice stream is not an 8-pair local rule (697 collision keys in a 65536-sample holdout), but has a sampled 12-pair horizon (0 collisions over 7370995 choices); exact toys still need the full toy block (k4 has 48 collision keys, k5 has 0). A generic k12 choice table is dead by lower bound: 6874430 sampled keys already imply a one-roundtrip row floor 13708480 over target. Exact toys also have coupled non-cartesian endpoint sets (n17=216 keys, largest=227), so independent carry decoders are not enough; splitting the DP choice by coefficient lane is also false (sample k12 lane collisions 75247/79247, exact full-toy lane collisions 89/101). Standard joint sparse form is not the missing algebraic parser either: it mismatches the active mask on 12599/16152 sampled active blocks and 55834/299013 exact toy active blocks, with full digit mismatches 12701/16152 and 59445/299013. It still needs a proof of the 12-pair horizon plus a non-JSF phase-clean joint local DP/rank parser and cleanup",
+            blocker: "the outgoing endpoint value can be compressed to a two-bit branch rank per active b32 block: exact n10/n12/n14/n16/n17 toys have at most 4 compatible endpoint/pattern branches per local key, and each coefficient lane has at most two outgoing carry values. A local min-cost endpoint DP reproduces every traced active block in the 4096 secp sample and exact toys (16202 sample blocks, 299013 toy blocks, 0 mismatches), so this is an algorithmic decoder shape rather than pure support lookup. The secp rank-source projection is 2659620 (-40380). The DP choice stream is not an 8-pair local rule (697 collision keys in a 65536-sample holdout), but has a sampled 12-pair horizon (0 collisions over 7370995 choices); exact toys still need the full toy block (k4 has 48 collision keys, k5 has 0). A generic k12 choice table is dead by lower bound: 6874430 sampled keys already imply a one-roundtrip row floor 13708480 over target. Exact toys also have coupled non-cartesian endpoint sets (n17=216 keys, largest=227), so independent carry decoders are not enough; splitting the DP choice by coefficient lane is also false (sample k12 lane collisions 75247/79247, exact full-toy lane collisions 89/101). Standard joint sparse form is not the missing algebraic parser either: it mismatches the active mask on 12599/16152 sampled active blocks and 55834/299013 exact toy active blocks, with full digit mismatches 12701/16152 and 59445/299013. Generic rank-sidecar cleanup is not cheap: exact toy endpoint-rank payload parity has n14 degree 13 and density 8178/16384. It still needs a proof of the 12-pair horizon plus a non-JSF phase-clean joint local DP/rank parser and cleanup",
         },
         Candidate {
             name: "halfgcd_second_column_zero_row_id_noactive_floor",
@@ -2191,6 +2191,14 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
         4usize;
     let halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_toy_largest_rank_bits =
         2usize;
+    let halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_payload_degree_n14 =
+        13usize;
+    let halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_payload_density_n14 =
+        8_178usize;
+    let halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_payload_bits_n14 =
+        8usize;
+    let halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_payload_max_rank_n14 =
+        3usize;
     let halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_margin =
         40_380usize;
     let halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_one_roundtrip_slack =
@@ -3770,6 +3778,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_toy_largest_endpoint_variants={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_toy_largest_endpoint_variants}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_toy_largest_pattern_variants={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_toy_largest_pattern_variants}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_toy_largest_rank_bits={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_toy_largest_rank_bits}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_payload_degree_n14={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_payload_degree_n14}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_payload_density_n14={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_payload_density_n14}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_payload_bits_n14={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_payload_bits_n14}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_payload_max_rank_n14={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_payload_max_rank_n14}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_margin={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_margin}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_one_roundtrip_slack={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_one_roundtrip_slack}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_two_app_gap={halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_two_app_gap}");
@@ -5386,6 +5398,15 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
                 <= 4
             && halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_toy_largest_rank_bits
                 <= 2
+            && halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_payload_degree_n14
+                + 1
+                >= 14
+            && halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_payload_density_n14
+                == 8_178
+            && halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_payload_bits_n14
+                == 8
+            && halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_payload_max_rank_n14
+                == 3
             && halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_margin
                 == 40_380
             && halfgcd_second_col_fixed_depth64_full_block_pattern_endpoint_rank_table_one_roundtrip_slack
