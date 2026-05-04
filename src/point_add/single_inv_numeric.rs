@@ -7351,32 +7351,14 @@ mod tests {
                 .unwrap_or(0)
         }
 
-        let cases = [
-            (8usize, 251usize),
-            (10, 1021),
-            (12, 4093),
-            (14, 16_381),
-            (16, 65_521),
-        ];
-        let mut covered_cases = 0usize;
-        let mut largest_target_rows = 0usize;
-        let mut largest_exact_rows = 0usize;
-        let mut largest_prefix_gap = 0usize;
-        let mut largest_decoder_gap = 0usize;
-        let mut largest_tail_gap = 0usize;
-        let mut n16_target_rows = 0usize;
-        let mut n16_prefix_max = 0usize;
-        let mut n16_decoder_max = 0usize;
-        let mut n16_tail_max = 0usize;
-        let mut n16_tail_slots = 0usize;
-
-        for &(n, p) in &cases {
-            let depth = (n / 4).max(1);
-            let exact_xs = (1..p).collect::<Vec<_>>();
-            let exact = merge_rows(&exact_xs, p, depth);
-
+        fn target_rows_for(
+            p: usize,
+            depth: usize,
+            small_exp: usize,
+            radius_exp: usize,
+        ) -> Vec<usize> {
             let mut target = std::collections::BTreeSet::<usize>::new();
-            let small_limit = (1usize << (n / 2).max(1)).min(p - 1);
+            let small_limit = (1usize << small_exp.max(1)).min(p - 1);
             for x in 1..=small_limit {
                 target.insert(x);
                 target.insert(p - x);
@@ -7395,7 +7377,7 @@ mod tests {
                 den_prev1 = den;
             }
             let center = (p * den_prev1) / num_prev1;
-            let radius = (1usize << (n / 3).max(1)).min(512);
+            let radius = (1usize << radius_exp.max(1)).min(p - 1);
             for delta in 0..=radius {
                 if center > delta {
                     target.insert(center - delta);
@@ -7406,12 +7388,62 @@ mod tests {
                 }
             }
 
-            let target_xs = target.into_iter().collect::<Vec<_>>();
+            target.into_iter().collect::<Vec<_>>()
+        }
+
+        let cases = [
+            (8usize, 251usize),
+            (10, 1021),
+            (12, 4093),
+            (14, 16_381),
+            (16, 65_521),
+        ];
+        let mut covered_cases = 0usize;
+        let mut largest_target_rows = 0usize;
+        let mut largest_exact_rows = 0usize;
+        let mut largest_prefix_gap = 0usize;
+        let mut largest_decoder_gap = 0usize;
+        let mut largest_tail_gap = 0usize;
+        let mut n16_target_rows = 0usize;
+        let mut n16_prefix_max = 0usize;
+        let mut n16_decoder_max = 0usize;
+        let mut n16_tail_max = 0usize;
+        let mut n16_tail_slots = 0usize;
+        let mut n16_min_cover_rows = 0usize;
+        let mut n16_min_cover_small_exp = 0usize;
+        let mut n16_min_cover_radius_exp = 0usize;
+        let mut n16_min_cover_over_target_x = 0usize;
+
+        for &(n, p) in &cases {
+            let depth = (n / 4).max(1);
+            let exact_xs = (1..p).collect::<Vec<_>>();
+            let exact = merge_rows(&exact_xs, p, depth);
+
+            let target_xs = target_rows_for(p, depth, (n / 2).max(1), (n / 3).max(1));
             let target_env = merge_rows(&target_xs, p, depth);
             let prefix_gap = max_gap(&exact.prefix, &target_env.prefix);
             let decoder_gap = max_gap(&exact.decoder, &target_env.decoder);
             let tail_gap = max_gap(&exact.tail, &target_env.tail);
             let covered = prefix_gap == 0 && decoder_gap == 0 && tail_gap == 0;
+
+            let mut min_cover: Option<(usize, usize, usize)> = None;
+            for small_exp in (n / 2).max(1)..=n {
+                for radius_exp in (n / 3).max(1)..=n {
+                    let cover_xs = target_rows_for(p, depth, small_exp, radius_exp);
+                    let cover_env = merge_rows(&cover_xs, p, depth);
+                    if max_gap(&exact.prefix, &cover_env.prefix) == 0
+                        && max_gap(&exact.decoder, &cover_env.decoder) == 0
+                        && max_gap(&exact.tail, &cover_env.tail) == 0
+                        && min_cover
+                            .map(|(old_rows, _, _)| cover_xs.len() < old_rows)
+                            .unwrap_or(true)
+                    {
+                        min_cover = Some((cover_xs.len(), small_exp, radius_exp));
+                    }
+                }
+            }
+            let (min_cover_rows, min_cover_small_exp, min_cover_radius_exp) =
+                min_cover.expect("toy target family did not cover even with exhaustive exponents");
             covered_cases += covered as usize;
             largest_target_rows = largest_target_rows.max(target_xs.len());
             largest_exact_rows = largest_exact_rows.max(exact_xs.len());
@@ -7423,9 +7455,12 @@ mod tests {
             let decoder_max = exact.decoder.iter().copied().max().unwrap_or(0);
             let tail_max = exact.tail.iter().copied().max().unwrap_or(0);
             eprintln!(
-                "half-GCD toy slot envelope n={n}: exact_rows={}, target_rows={}, covered={covered}, prefix={:?}->{:?}, decoder={:?}->{:?}, tail_len={} tail_max={} gap=({prefix_gap},{decoder_gap},{tail_gap})",
+                "half-GCD toy slot envelope n={n}: exact_rows={}, target_rows={}, min_cover_rows={} small_exp={} radius_exp={}, covered={covered}, prefix={:?}->{:?}, decoder={:?}->{:?}, tail_len={} tail_max={} gap=({prefix_gap},{decoder_gap},{tail_gap})",
                 exact_xs.len(),
                 target_xs.len(),
+                min_cover_rows,
+                min_cover_small_exp,
+                min_cover_radius_exp,
                 target_env.prefix,
                 exact.prefix,
                 target_env.decoder,
@@ -7439,6 +7474,10 @@ mod tests {
                 n16_decoder_max = decoder_max;
                 n16_tail_max = tail_max;
                 n16_tail_slots = exact.tail.len();
+                n16_min_cover_rows = min_cover_rows;
+                n16_min_cover_small_exp = min_cover_small_exp;
+                n16_min_cover_radius_exp = min_cover_radius_exp;
+                n16_min_cover_over_target_x = min_cover_rows / target_xs.len();
             }
         }
 
@@ -7454,6 +7493,10 @@ mod tests {
         println!("METRIC halfgcd_slot_envelope_toy_n16_decoder_max_bits={n16_decoder_max}");
         println!("METRIC halfgcd_slot_envelope_toy_n16_tail_max_bits={n16_tail_max}");
         println!("METRIC halfgcd_slot_envelope_toy_n16_tail_slots={n16_tail_slots}");
+        println!("METRIC halfgcd_slot_envelope_toy_n16_min_cover_rows={n16_min_cover_rows}");
+        println!("METRIC halfgcd_slot_envelope_toy_n16_min_cover_small_exp={n16_min_cover_small_exp}");
+        println!("METRIC halfgcd_slot_envelope_toy_n16_min_cover_radius_exp={n16_min_cover_radius_exp}");
+        println!("METRIC halfgcd_slot_envelope_toy_n16_min_cover_over_target_x={n16_min_cover_over_target_x}");
         assert_eq!(
             covered_cases, 0,
             "targeted half-GCD slot rows now cover exact toy domains; revisit the secp proof path"
@@ -7464,6 +7507,13 @@ mod tests {
         assert!(
             largest_target_rows < largest_exact_rows / 2,
             "toy target set became too close to exhaustive to support the secp proof path"
+        );
+        assert!(
+            n16_min_cover_rows > 16_000
+                && n16_min_cover_small_exp >= 8
+                && n16_min_cover_radius_exp >= 13
+                && n16_min_cover_over_target_x > 25,
+            "toy slot coverage no longer needs exponentially wider target rows; revisit the secp proof path"
         );
     }
 

@@ -247,7 +247,7 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             name: "halfgcd_second_column_fixed_depth64_public_slot_envelope",
             scratch_bits: 515,
             charged_toffoli: None,
-            blocker: "sample plus targeted adversarial slot envelope has only 3 prefix, 3 decoder, and 1 tail high-layer slots; popcount app projects 2345809 mean / 2408100 p99 and static quantum coefficient application projects 2539415 mean / 2612732 p99, but exact toy domains n=8..16 show target rows miss the full slot envelope in 5/5 cases. Charging a conservative 8-bit tail already pushes p99 to 2711178, and a one-layer prefix/decoder guard pushes mean to 2715840, so this is not production-charged until the per-slot envelope is actually proved for secp and the fixed-depth extractor/application circuit is wired and cleaned",
+            blocker: "sample plus targeted adversarial slot envelope has only 3 prefix, 3 decoder, and 1 tail high-layer slots; popcount app projects 2345809 mean / 2408100 p99 and static quantum coefficient application projects 2539415 mean / 2612732 p99, but exact toy domains n=8..16 show target rows miss the full slot envelope in 5/5 cases. At n16 the 577-row target set needs 16897 rows with radius exponent 13 to cover exact slots, so the proof family scales exponentially. Charging a conservative 8-bit tail already pushes p99 to 2711178, and a one-layer prefix/decoder guard pushes mean to 2715840, so this is not production-charged until a different public-envelope proof or fixed-depth extractor/application circuit exists",
         },
         Candidate {
             name: "halfgcd_second_column_fixed_depth64_tail_stream",
@@ -1695,6 +1695,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let halfgcd_second_col_fixed_depth64_slot_envelope_toy_largest_decoder_gap = 1usize;
     let halfgcd_second_col_fixed_depth64_slot_envelope_toy_largest_tail_gap = 3usize;
     let halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_target_rows = 577usize;
+    let halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_min_cover_rows = 16_897usize;
+    let halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_min_cover_small_exp = 8usize;
+    let halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_min_cover_radius_exp = 13usize;
+    let halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_min_cover_over_target_x = 29usize;
     let halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_tail_slots = 15usize;
     let halfgcd_second_col_fixed_depth64_static_app_mean = 2_934_322usize;
     let halfgcd_second_col_fixed_depth64_static_app_p99 = 3_010_096usize;
@@ -3041,6 +3045,10 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_slot_envelope_toy_largest_decoder_gap={halfgcd_second_col_fixed_depth64_slot_envelope_toy_largest_decoder_gap}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_slot_envelope_toy_largest_tail_gap={halfgcd_second_col_fixed_depth64_slot_envelope_toy_largest_tail_gap}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_target_rows={halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_target_rows}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_min_cover_rows={halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_min_cover_rows}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_min_cover_small_exp={halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_min_cover_small_exp}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_min_cover_radius_exp={halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_min_cover_radius_exp}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_min_cover_over_target_x={halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_min_cover_over_target_x}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_tail_slots={halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_tail_slots}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_static_app_mean={halfgcd_second_col_fixed_depth64_static_app_mean}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_static_app_p99={halfgcd_second_col_fixed_depth64_static_app_p99}");
@@ -4506,7 +4514,11 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             && halfgcd_second_col_fixed_depth64_slot_envelope_toy_covered_cases == 0
             && halfgcd_second_col_fixed_depth64_slot_envelope_toy_largest_prefix_gap == 1
             && halfgcd_second_col_fixed_depth64_slot_envelope_toy_largest_decoder_gap == 1
-            && halfgcd_second_col_fixed_depth64_slot_envelope_toy_largest_tail_gap == 3,
+            && halfgcd_second_col_fixed_depth64_slot_envelope_toy_largest_tail_gap == 3
+            && halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_min_cover_rows > 16_000
+            && halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_min_cover_small_exp >= 8
+            && halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_min_cover_radius_exp >= 13
+            && halfgcd_second_col_fixed_depth64_slot_envelope_toy_n16_min_cover_over_target_x > 25,
         "half-GCD public slot envelope no longer gives a SOTA-shaped extractor/application ledger"
     );
     assert!(
