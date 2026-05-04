@@ -3342,6 +3342,58 @@ mod tests {
         (degree, density, max_multiplicity)
     }
 
+    fn half_gcd_second_column_alignment_control_parity_anf_stats(
+        n: usize,
+        p: u16,
+        mask: usize,
+    ) -> (usize, usize, usize) {
+        let size = 1usize << n;
+        let depth = (n / 4).max(1);
+        let mut anf = vec![0u8; size];
+        let mut max_alignment = 0usize;
+        for x in 1..p {
+            let mut u = p as usize;
+            let mut v = x as usize;
+            let mut parity = 0u8;
+            let mut prefix_steps = 0usize;
+            while prefix_steps < depth && v != 0 {
+                let q = u / v;
+                let alignment = usize_bit_len_for_payload_test(q).saturating_sub(1);
+                max_alignment = max_alignment.max(alignment);
+                parity ^= ((alignment & mask).count_ones() as u8) & 1;
+                let rem = u - q * v;
+                u = v;
+                v = rem;
+                prefix_steps += 1;
+            }
+            while v != 0 {
+                let q = u / v;
+                let alignment = usize_bit_len_for_payload_test(q).saturating_sub(1);
+                max_alignment = max_alignment.max(alignment);
+                parity ^= ((alignment & mask).count_ones() as u8) & 1;
+                let rem = u - q * v;
+                u = v;
+                v = rem;
+            }
+            anf[x as usize] = parity;
+        }
+        for bit in 0..n {
+            for idx in 0..size {
+                if (idx & (1usize << bit)) != 0 {
+                    anf[idx] ^= anf[idx ^ (1usize << bit)];
+                }
+            }
+        }
+        let density = anf.iter().filter(|&&v| v != 0).count();
+        let degree = anf
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &v)| if v != 0 { Some(i.count_ones() as usize) } else { None })
+            .max()
+            .unwrap_or(0);
+        (degree, density, max_alignment)
+    }
+
     fn half_gcd_second_column_prefix_reversibility_stats(
         n: usize,
         p: u16,
@@ -3906,6 +3958,38 @@ mod tests {
                 assert_eq!(degree, 0);
                 assert_eq!(density, 0);
             }
+        }
+    }
+
+    #[test]
+    fn half_gcd_second_column_alignment_controls_are_not_generic_mbu_clean() {
+        // The dynamic-barrel opening only affects the executed-Toffoli metric
+        // if alignment layer controls can become classical conditions.  A
+        // generic X-measurement escape would need a kickmix phase for parities
+        // of those controls.  On toy fields a representative alignment-control
+        // parity is already high-degree and dense, so the dynamic route still
+        // needs a local measurement-clean extractor, not generic MBUC.
+        let cases = [
+            (8usize, 251u16, 0b11usize),
+            (10usize, 1021u16, 0b101usize),
+            (12usize, 4093u16, 0b101usize),
+            (14usize, 16381u16, 0b1011usize),
+        ];
+        for &(n, p, mask) in &cases {
+            let (degree, density, max_alignment) =
+                half_gcd_second_column_alignment_control_parity_anf_stats(n, p, mask);
+            let table = 1usize << n;
+            eprintln!(
+                "half-GCD second-column alignment-control parity ANF: n={n}, mask={mask:#b}, degree={degree}, density={density}/{table}, max_alignment={max_alignment}"
+            );
+            if n == 14 {
+                println!("METRIC halfgcd_second_col_alignment_mbu_degree_n14={degree}");
+                println!("METRIC halfgcd_second_col_alignment_mbu_density_n14={density}");
+                println!("METRIC halfgcd_second_col_alignment_mbu_max_alignment_n14={max_alignment}");
+            }
+            assert!(max_alignment + 1 >= n / 2, "toy alignment controls stopped exercising high layers");
+            assert!(degree + 2 >= n, "alignment-control parity unexpectedly low degree");
+            assert!(density > table / 4, "alignment-control parity unexpectedly sparse");
         }
     }
 
@@ -5321,6 +5405,297 @@ mod tests {
         assert!(
             noscan_fitting_rows > 0,
             "scan-free fixed-depth lower bound no longer has an average/scratch opening"
+        );
+    }
+
+    #[test]
+    fn half_gcd_second_column_fixed_depth_dynamic_barrel_exec_model() {
+        // The charged fixed-depth64 row pays all 8 alignment layers globally.
+        // For the production metric, a layer controlled by a clean alignment
+        // bit only executes when that bit is one.  Keep the same full 8-bit
+        // correctness envelope, but charge prefix, coefficient-decoder, and
+        // tail barrel layers by the popcount of the actual shift amount.  This
+        // is the first go/no-go check for replacing the global high-layer tax
+        // with phase-clean executed controls.
+        const SCAFFOLD_AFTER_DIV: usize = 642_716;
+        const TAIL_REPLAY_PER_BIT_CCX: usize = 587;
+        const TARGET: f64 = 2_700_000.0;
+        const GOOGLE_LOW_QUBIT_SCRATCH: usize = 663;
+        const DEPTH: usize = 64;
+        let p = SECP256K1_P;
+        let samples = 4096usize;
+        let mut rng = 0x5ec0_0001_d7ba_0064u64;
+        let exact_barrel_bits = 8usize;
+        let entry_stored_bits = |z: SignedMagU512ForHalfGcdTest| {
+            u512_bit_len_for_halfgcd_test(z.mag) + (!z.mag.is_zero()) as usize
+        };
+        let mut static_rows = Vec::with_capacity(samples);
+        let mut dynamic_rows = Vec::with_capacity(samples);
+        let mut scratch_rows = Vec::with_capacity(samples);
+        let mut prefix_decoder_dynamic_barrels = Vec::with_capacity(samples);
+        let mut prefix_decoder_static_barrels = Vec::with_capacity(samples);
+        let mut tail_dynamic_barrels = Vec::with_capacity(samples);
+        let mut tail_static_barrels = Vec::with_capacity(samples);
+        let mut high_layer_rows = Vec::with_capacity(samples);
+        let mut first64_static = 0isize;
+        let mut first64_dynamic = 0isize;
+
+        for sample_idx in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() {
+                x = U256::from(1u64);
+            }
+            let mut u = p;
+            let mut v = x;
+            let mut b = smag_for_halfgcd_test(false, U512::ZERO);
+            let mut d = smag_for_halfgcd_test(false, U512::from(1u64));
+            let mut residual_digit_width = 0usize;
+            let mut coeff_digit_width = 0usize;
+            let mut final_fix_width = 0usize;
+            let mut residual_width_sum = 0usize;
+            let mut coeff_width_sum = 0usize;
+            let mut residual_dynamic_barrel = 0usize;
+            let mut coeff_dynamic_barrel = 0usize;
+            let mut decoder_digit = 0usize;
+            let mut decoder_final_fix = 0usize;
+            let mut decoder_width_sum = 0usize;
+            let mut decoder_dynamic_barrel = 0usize;
+            let mut high_layer_hits = 0usize;
+            let mut prefix_steps = 0usize;
+            let mut peak_scratch = entry_stored_bits(b)
+                + entry_stored_bits(d)
+                + u256_bit_len(u)
+                + u256_bit_len(v);
+
+            while prefix_steps < DEPTH && !v.is_zero() {
+                let q = u / v;
+                let (digits, prefinal_rem, prefinal_q) =
+                    nonrestoring_prefinal_signed_digits_for_centered_test(
+                        u512_from_u256_for_halfgcd_test(u),
+                        u512_from_u256_for_halfgcd_test(v),
+                    );
+                let final_negative = prefinal_rem.neg && !prefinal_rem.mag.is_zero();
+                let floor_q = if final_negative {
+                    prefinal_q - U512::from(1u64)
+                } else {
+                    prefinal_q
+                };
+                assert_eq!(floor_q, u512_from_u256_for_halfgcd_test(q));
+                let width = u256_bit_len(u).max(u256_bit_len(v)).max(1);
+                let coeff_width = u512_bit_len_for_halfgcd_test(b.mag)
+                    .max(u512_bit_len_for_halfgcd_test(d.mag))
+                    .max(1)
+                    + 1;
+                let align = digits.len().saturating_sub(1);
+                let align_pop = align.count_ones() as usize;
+                high_layer_hits += ((align >> 7) & 1) as usize;
+                residual_digit_width += digits.len() * width.saturating_sub(1);
+                final_fix_width += (2 * width).saturating_sub(1)
+                    + (2 * coeff_width).saturating_sub(1);
+                residual_width_sum += width;
+                coeff_width_sum += coeff_width;
+                residual_dynamic_barrel += width * align_pop;
+                coeff_dynamic_barrel += coeff_width * align_pop;
+
+                let mut coeff_acc = b;
+                for &(digit_neg, sh) in &digits {
+                    let term = signed_mul_mag_for_halfgcd_test(
+                        d,
+                        digit_neg,
+                        U512::from(1u64) << sh,
+                    );
+                    let next = signed_add_for_halfgcd_test(
+                        coeff_acc,
+                        signed_neg_for_halfgcd_test(term),
+                    );
+                    let op_width = u512_bit_len_for_halfgcd_test(coeff_acc.mag)
+                        .max(u512_bit_len_for_halfgcd_test(term.mag))
+                        .max(u512_bit_len_for_halfgcd_test(next.mag))
+                        .max(1)
+                        + 1;
+                    coeff_digit_width += op_width.saturating_sub(1);
+                    coeff_acc = next;
+                }
+                if final_negative {
+                    coeff_acc = signed_add_for_halfgcd_test(coeff_acc, d);
+                }
+
+                let rem = u - q * v;
+                let nb = d;
+                let nd = signed_sub_scaled_for_halfgcd_test(b, q, d);
+                assert_eq!(coeff_acc, nd, "fixed-depth dynamic replay mismatch");
+
+                let numer = if b.mag.is_zero() {
+                    nd.mag
+                } else {
+                    nd.mag - U512::from(1u64)
+                };
+                let denom = nb.mag;
+                assert!(!denom.is_zero(), "fixed-depth dynamic decoder denominator vanished");
+                assert_eq!(
+                    numer / denom,
+                    u512_from_u256_for_halfgcd_test(q),
+                    "fixed-depth dynamic decoder reverse quotient mismatch"
+                );
+                let (decoder_digits, decoder_prefinal_rem, decoder_prefinal_q) =
+                    nonrestoring_prefinal_signed_digits_for_centered_test(numer, denom);
+                let decoder_final_negative =
+                    decoder_prefinal_rem.neg && !decoder_prefinal_rem.mag.is_zero();
+                let decoder_floor_q = if decoder_final_negative {
+                    decoder_prefinal_q - U512::from(1u64)
+                } else {
+                    decoder_prefinal_q
+                };
+                assert_eq!(decoder_floor_q, u512_from_u256_for_halfgcd_test(q));
+                let decoder_width = u512_bit_len_for_halfgcd_test(numer)
+                    .max(u512_bit_len_for_halfgcd_test(denom))
+                    .max(1);
+                let decoder_align = decoder_digits.len().saturating_sub(1);
+                high_layer_hits += ((decoder_align >> 7) & 1) as usize;
+                decoder_digit += decoder_digits.len() * decoder_width.saturating_sub(1);
+                decoder_final_fix += (2 * decoder_width).saturating_sub(1);
+                decoder_width_sum += decoder_width;
+                decoder_dynamic_barrel +=
+                    decoder_width * decoder_align.count_ones() as usize;
+
+                u = v;
+                v = rem;
+                b = nb;
+                d = nd;
+                prefix_steps += 1;
+                peak_scratch = peak_scratch.max(
+                    entry_stored_bits(b)
+                        + entry_stored_bits(d)
+                        + u256_bit_len(u)
+                        + u256_bit_len(v),
+                );
+            }
+
+            let mut tail_payload = 0usize;
+            let mut tail_extract_floor = 0usize;
+            let mut tail_static_barrel = 0usize;
+            let mut tail_dynamic_barrel = 0usize;
+            let mut tu = u;
+            let mut tv = v;
+            let col_bits = entry_stored_bits(b) + entry_stored_bits(d);
+            while !tv.is_zero() {
+                let q = tu / tv;
+                let q_bits = u256_bit_len(q);
+                let tail_width = u256_bit_len(tu).max(u256_bit_len(tv)).max(1);
+                tail_payload += q_bits;
+                tail_extract_floor += q_bits * 3 * tail_width + tail_width;
+                tail_static_barrel += tail_width * exact_barrel_bits;
+                tail_dynamic_barrel +=
+                    tail_width * q_bits.saturating_sub(1).count_ones() as usize;
+                high_layer_hits += ((q_bits.saturating_sub(1) >> 7) & 1) as usize;
+                let rem = tu - q * tv;
+                tu = tv;
+                tv = rem;
+                peak_scratch = peak_scratch.max(
+                    col_bits + u256_bit_len(tu) + u256_bit_len(tv) + tail_payload,
+                );
+            }
+            assert_eq!(tu, U256::from(1u64), "dynamic fixed-depth tail missed gcd 1");
+
+            let app = halfgcd_signed_two_coeff_apply_cost_for_test(b, d);
+            let replay = tail_payload * TAIL_REPLAY_PER_BIT_CCX;
+            let prefix_static_barrel = (residual_width_sum + coeff_width_sum) * exact_barrel_bits;
+            let prefix_dynamic_barrel = residual_dynamic_barrel + coeff_dynamic_barrel;
+            let prefix_common = residual_digit_width
+                + coeff_digit_width
+                + final_fix_width
+                + residual_width_sum
+                + coeff_width_sum;
+            let static_extraction = prefix_common + prefix_static_barrel;
+            let dynamic_extraction = prefix_common + prefix_dynamic_barrel;
+            let decoder_static_barrel = decoder_width_sum * exact_barrel_bits;
+            let decoder_common = decoder_digit + decoder_final_fix + decoder_width_sum;
+            let decoder_static = (decoder_common + decoder_static_barrel) as isize;
+            let decoder_dynamic = (decoder_common + decoder_dynamic_barrel) as isize;
+            let static_pointadd = SCAFFOLD_AFTER_DIV as isize
+                + 2 * (app + replay + 2 * static_extraction) as isize
+                + 4 * decoder_static
+                + 4 * (tail_extract_floor + tail_static_barrel) as isize;
+            let dynamic_pointadd = SCAFFOLD_AFTER_DIV as isize
+                + 2 * (app + replay + 2 * dynamic_extraction) as isize
+                + 4 * decoder_dynamic
+                + 4 * (tail_extract_floor + tail_dynamic_barrel) as isize;
+            if sample_idx < 64 {
+                first64_static += static_pointadd;
+                first64_dynamic += dynamic_pointadd;
+            }
+            static_rows.push(static_pointadd);
+            dynamic_rows.push(dynamic_pointadd);
+            scratch_rows.push(peak_scratch);
+            prefix_decoder_static_barrels.push(prefix_static_barrel + decoder_static_barrel);
+            prefix_decoder_dynamic_barrels.push(prefix_dynamic_barrel + decoder_dynamic_barrel);
+            tail_static_barrels.push(tail_static_barrel);
+            tail_dynamic_barrels.push(tail_dynamic_barrel);
+            high_layer_rows.push(high_layer_hits);
+        }
+
+        let mean_isize = |rows: &[isize]| -> f64 {
+            rows.iter().map(|&v| v as f64).sum::<f64>() / rows.len() as f64
+        };
+        let mean_usize = |rows: &[usize]| -> f64 {
+            rows.iter().map(|&v| v as f64).sum::<f64>() / rows.len() as f64
+        };
+        let p99_isize = |rows: &mut Vec<isize>| -> isize {
+            rows.sort_unstable();
+            rows[rows.len() * 99 / 100]
+        };
+        let p99_usize = |rows: &mut Vec<usize>| -> usize {
+            rows.sort_unstable();
+            rows[rows.len() * 99 / 100]
+        };
+        let static_mean = mean_isize(&static_rows);
+        let dynamic_mean = mean_isize(&dynamic_rows);
+        let savings_mean = static_mean - dynamic_mean;
+        let dynamic_first64 = first64_dynamic as f64 / 64.0;
+        let static_first64 = first64_static as f64 / 64.0;
+        let dynamic_p99 = p99_isize(&mut dynamic_rows);
+        let static_p99 = p99_isize(&mut static_rows);
+        let scratch_p99 = p99_usize(&mut scratch_rows);
+        let prefix_decoder_static_mean = mean_usize(&prefix_decoder_static_barrels);
+        let prefix_decoder_dynamic_mean = mean_usize(&prefix_decoder_dynamic_barrels);
+        let tail_static_mean = mean_usize(&tail_static_barrels);
+        let tail_dynamic_mean = mean_usize(&tail_dynamic_barrels);
+        let high_layer_p99 = p99_usize(&mut high_layer_rows);
+        println!("METRIC halfgcd_second_col_fixed_depth64_dynamic_barrel_static_mean={static_mean:.3}");
+        println!("METRIC halfgcd_second_col_fixed_depth64_dynamic_barrel_static_first64={static_first64:.3}");
+        println!("METRIC halfgcd_second_col_fixed_depth64_dynamic_barrel_static_p99={static_p99}");
+        println!("METRIC halfgcd_second_col_fixed_depth64_dynamic_barrel_mean={dynamic_mean:.3}");
+        println!("METRIC halfgcd_second_col_fixed_depth64_dynamic_barrel_first64={dynamic_first64:.3}");
+        println!("METRIC halfgcd_second_col_fixed_depth64_dynamic_barrel_p99={dynamic_p99}");
+        println!(
+            "METRIC halfgcd_second_col_fixed_depth64_dynamic_barrel_gap_to_2700k={:.3}",
+            dynamic_mean - TARGET
+        );
+        println!("METRIC halfgcd_second_col_fixed_depth64_dynamic_barrel_savings_mean={savings_mean:.3}");
+        println!("METRIC halfgcd_second_col_fixed_depth64_dynamic_barrel_scratch_p99={scratch_p99}");
+        println!("METRIC halfgcd_second_col_fixed_depth64_dynamic_prefix_decoder_static_mean={prefix_decoder_static_mean:.3}");
+        println!("METRIC halfgcd_second_col_fixed_depth64_dynamic_prefix_decoder_mean={prefix_decoder_dynamic_mean:.3}");
+        println!("METRIC halfgcd_second_col_fixed_depth64_dynamic_tail_static_mean={tail_static_mean:.3}");
+        println!("METRIC halfgcd_second_col_fixed_depth64_dynamic_tail_mean={tail_dynamic_mean:.3}");
+        println!("METRIC halfgcd_second_col_fixed_depth64_dynamic_high_layer_hits_p99={high_layer_p99}");
+        eprintln!(
+            "half-GCD fixed-depth64 dynamic barrel model: static_mean={static_mean:.1}, dynamic_mean={dynamic_mean:.1}, first64={dynamic_first64:.1}, p99={dynamic_p99}, scratch_p99={scratch_p99}, savings={savings_mean:.1}, high_layer_p99={high_layer_p99}"
+        );
+        assert!(
+            scratch_p99 <= GOOGLE_LOW_QUBIT_SCRATCH,
+            "dynamic barrel fixed-depth64 schedule stopped fitting scratch"
+        );
+        assert!(
+            static_mean > TARGET && static_p99 > TARGET as isize,
+            "static generic-barrel reference no longer matches the charged miss"
+        );
+        assert!(
+            dynamic_mean < TARGET && dynamic_first64 < TARGET,
+            "executed-control dynamic barrel model does not beat the low-qubit average target"
+        );
+        assert!(
+            savings_mean > 40_870.0,
+            "dynamic barrel charging does not recover the current fixed-depth64 gap"
         );
     }
 

@@ -154,6 +154,12 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             blocker: "second-column exact decoder average model fits at 2606688 and fixed-bound active prefix toy cleans, but active-control Bennett cleanup averages 3462517 and p99 remains 3705990",
         },
         Candidate {
+            name: "halfgcd_second_column_fixed_depth64_dynamic_barrel_model",
+            scratch_bits: 515,
+            charged_toffoli: None,
+            blocker: "if alignment layers are BitId conditions, depth64 dynamic barrels average 1986713 with p99 2047416, but simulator stats do not discount quantum controls and generic alignment-control MBU phase is dense at n14",
+        },
+        Candidate {
             name: "halfgcd_second_column_fixed_depth64_tail_stream",
             scratch_bits: 515,
             charged_toffoli: Some(2_740_870),
@@ -599,6 +605,23 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
         halfgcd_second_col_fixed_depth64_exact_prefix_bounded_tail_logbarrel_plus_two_width_mean
             as isize
             - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
+    let halfgcd_second_col_fixed_depth64_dynamic_barrel_static_mean = 2_740_052usize;
+    let halfgcd_second_col_fixed_depth64_dynamic_barrel_static_p99 = 2_824_674usize;
+    let halfgcd_second_col_fixed_depth64_dynamic_barrel_mean = 1_986_713usize;
+    let halfgcd_second_col_fixed_depth64_dynamic_barrel_p99 = 2_047_416usize;
+    let halfgcd_second_col_fixed_depth64_dynamic_barrel_gap =
+        halfgcd_second_col_fixed_depth64_dynamic_barrel_mean as isize
+            - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
+    let halfgcd_second_col_fixed_depth64_dynamic_barrel_savings_mean = 753_339usize;
+    let halfgcd_second_col_fixed_depth64_dynamic_barrel_scratch_p99 = 515usize;
+    let halfgcd_second_col_fixed_depth64_dynamic_prefix_decoder_static_mean = 160_541usize;
+    let halfgcd_second_col_fixed_depth64_dynamic_prefix_decoder_mean = 19_250usize;
+    let halfgcd_second_col_fixed_depth64_dynamic_tail_static_mean = 51_671usize;
+    let halfgcd_second_col_fixed_depth64_dynamic_tail_mean = 4_628usize;
+    let halfgcd_second_col_fixed_depth64_dynamic_high_layer_hits_p99 = 0usize;
+    let halfgcd_second_col_alignment_mbu_degree_n14 = 14usize;
+    let halfgcd_second_col_alignment_mbu_density_n14 = 8_142usize;
+    let halfgcd_second_col_alignment_mbu_max_alignment_n14 = 13usize;
 
     eprintln!("\nScratch-600 architecture frontier:");
     for c in candidates {
@@ -976,6 +999,21 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_exact_prefix_bounded_tail_logbarrel_plus_two_width_mean={halfgcd_second_col_fixed_depth64_exact_prefix_bounded_tail_logbarrel_plus_two_width_mean}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_exact_prefix_bounded_tail_logbarrel_plus_two_width_p99={halfgcd_second_col_fixed_depth64_exact_prefix_bounded_tail_logbarrel_plus_two_width_p99}");
     println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_exact_prefix_bounded_tail_logbarrel_plus_two_width_gap_to_2700k={halfgcd_second_col_fixed_depth64_exact_prefix_bounded_tail_logbarrel_plus_two_width_gap}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_dynamic_barrel_static_mean={halfgcd_second_col_fixed_depth64_dynamic_barrel_static_mean}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_dynamic_barrel_static_p99={halfgcd_second_col_fixed_depth64_dynamic_barrel_static_p99}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_dynamic_barrel_mean={halfgcd_second_col_fixed_depth64_dynamic_barrel_mean}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_dynamic_barrel_p99={halfgcd_second_col_fixed_depth64_dynamic_barrel_p99}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_dynamic_barrel_gap_to_2700k={halfgcd_second_col_fixed_depth64_dynamic_barrel_gap}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_dynamic_barrel_savings_mean={halfgcd_second_col_fixed_depth64_dynamic_barrel_savings_mean}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_dynamic_barrel_scratch_p99={halfgcd_second_col_fixed_depth64_dynamic_barrel_scratch_p99}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_dynamic_prefix_decoder_static_mean={halfgcd_second_col_fixed_depth64_dynamic_prefix_decoder_static_mean}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_dynamic_prefix_decoder_mean={halfgcd_second_col_fixed_depth64_dynamic_prefix_decoder_mean}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_dynamic_tail_static_mean={halfgcd_second_col_fixed_depth64_dynamic_tail_static_mean}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_dynamic_tail_mean={halfgcd_second_col_fixed_depth64_dynamic_tail_mean}");
+    println!("METRIC scratch600_halfgcd_second_col_fixed_depth64_dynamic_high_layer_hits_p99={halfgcd_second_col_fixed_depth64_dynamic_high_layer_hits_p99}");
+    println!("METRIC scratch600_halfgcd_second_col_alignment_mbu_degree_n14={halfgcd_second_col_alignment_mbu_degree_n14}");
+    println!("METRIC scratch600_halfgcd_second_col_alignment_mbu_density_n14={halfgcd_second_col_alignment_mbu_density_n14}");
+    println!("METRIC scratch600_halfgcd_second_col_alignment_mbu_max_alignment_n14={halfgcd_second_col_alignment_mbu_max_alignment_n14}");
 
     assert!(best_state <= STRICT_SCRATCH, "at least some state shapes fit");
     assert!(streamed_gap_to_google > 0, "no fully charged <=600-scratch row should be counted as solved yet");
@@ -1329,5 +1367,20 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             && halfgcd_second_col_fixed_depth64_exact_prefix_bounded_tail_logbarrel_plus_two_width_p99
                 > GOOGLE_LOW_QUBIT_TOFFOLI,
         "half-GCD fixed-depth64 tail-alignment frontier changed; revisit tail parser priority"
+    );
+    assert!(
+        halfgcd_second_col_fixed_depth64_dynamic_barrel_static_mean
+            > GOOGLE_LOW_QUBIT_TOFFOLI
+            && halfgcd_second_col_fixed_depth64_dynamic_barrel_mean
+                < GOOGLE_LOW_QUBIT_TOFFOLI
+            && halfgcd_second_col_fixed_depth64_dynamic_barrel_p99
+                < GOOGLE_LOW_QUBIT_TOFFOLI
+            && halfgcd_second_col_fixed_depth64_dynamic_barrel_savings_mean
+                > halfgcd_second_col_fixed_depth64_exact_tail_logbarrel_gap as usize
+            && halfgcd_second_col_fixed_depth64_dynamic_barrel_scratch_p99
+                == halfgcd_second_col_fixed_depth64_scratch_p99
+            && halfgcd_second_col_alignment_mbu_degree_n14 >= 14
+            && halfgcd_second_col_alignment_mbu_density_n14 > (1usize << 14) / 4,
+        "half-GCD dynamic barrel/classical-control frontier changed; revisit measurement-clean alignment priority"
     );
 }
