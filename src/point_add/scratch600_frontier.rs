@@ -144,8 +144,8 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
         Candidate {
             name: "direct_centered_signnorm_logical_coeff_signs",
             scratch_bits: 657,
-            charged_toffoli: Some(2_575_314),
-            blocker: "det-low2 xor coeff_v_sign removes the normalization-sign sidecar in exact toys, and the local predicate toy is phase-clean at 14 CCX. Conservative exact-rem logical-sign accounting clears the average harness metric at 2575314 mean / 2574268 first64 while p99 remains 2746960, so this is now an average-shaped structural opening. It is not production-wired: deleting physical rem cneg would only clear p99 by 2720, the tested signed-remainder recurrence jumps to 3136080 from 180 p99 steps, and the signed-domain non-restoring body needs a relative-negative zero predicate per digit (toy 416 CCX, scaled predicate 1025 CCX). Promotion needs the full direct-centered extractor, normalized-rem cneg, coefficient-sign recovery, and reverse cleanup wired together",
+            charged_toffoli: Some(2_581_169),
+            blocker: "det-low2 xor coeff_v_sign removes the normalization-sign sidecar in exact toys, and the local predicate toy is phase-clean at 14 CCX. Charging compute/uncompute of that predicate during reverse cleanup, conservative exact-rem logical-sign accounting still clears the average harness metric at 2581169 mean / 2580122 first64 while p99 remains 2753624, so this is an average-shaped structural opening. It is not production-wired: deleting physical rem cneg would only clear p99 by 2720, the tested signed-remainder recurrence jumps to 3136080 from 180 p99 steps, and the signed-domain non-restoring body needs a relative-negative zero predicate per digit (toy 416 CCX, scaled predicate 1025 CCX). Promotion needs the full direct-centered extractor, normalized-rem cneg, coefficient-sign recovery, and reverse cleanup wired together",
         },
         Candidate {
             name: "direct_centered_restoring_final_stored_alignment",
@@ -391,6 +391,13 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let direct_signnorm_logsign_split_mean = 2_575_313.936f64;
     let direct_signnorm_logsign_once_first64 = 2_553_434.812f64;
     let direct_signnorm_logsign_split_first64 = 2_574_268.438f64;
+    let direct_signnorm_logsign_recovery_roundtrip_per_step = 28usize;
+    let direct_signnorm_logsign_recovery_cost_mean = 2_927.295f64;
+    let direct_signnorm_logsign_recovery_cost_first64 = 2_926.875f64;
+    let direct_signnorm_logsign_recovery_cost_p99 = 3_304usize;
+    let direct_signnorm_logsign_once_recovered_mean = 2_560_231.797f64;
+    let direct_signnorm_logsign_once_recovered_first64 = 2_559_288.562f64;
+    let direct_signnorm_logsign_once_recovered_p99 = 2_730_510usize;
     let direct_signnorm_logsign_no_rem_cneg_projection_p99 = 2_697_280usize;
     let direct_signnorm_logsign_no_rem_cneg_gap =
         direct_signnorm_logsign_no_rem_cneg_projection_p99 as isize
@@ -413,6 +420,9 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let direct_signnorm_logsign_exact_split_mean = 2_617_187.391f64;
     let direct_signnorm_logsign_exact_once_first64 = 2_574_268.438f64;
     let direct_signnorm_logsign_exact_split_first64 = 2_615_935.688f64;
+    let direct_signnorm_logsign_exact_once_recovered_mean = 2_581_168.525f64;
+    let direct_signnorm_logsign_exact_once_recovered_first64 = 2_580_122.188f64;
+    let direct_signnorm_logsign_exact_once_recovered_p99 = 2_753_624usize;
     let direct_signnorm_logsign_once_gap =
         direct_signnorm_logsign_once_p99 as isize - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
     let direct_signnorm_logsign_split_gap =
@@ -425,6 +435,13 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
         direct_signnorm_logsign_exact_once_mean - GOOGLE_LOW_QUBIT_TOFFOLI as f64;
     let direct_signnorm_logsign_exact_once_first64_gap =
         direct_signnorm_logsign_exact_once_first64 - GOOGLE_LOW_QUBIT_TOFFOLI as f64;
+    let direct_signnorm_logsign_exact_once_recovered_mean_gap =
+        direct_signnorm_logsign_exact_once_recovered_mean - GOOGLE_LOW_QUBIT_TOFFOLI as f64;
+    let direct_signnorm_logsign_exact_once_recovered_first64_gap =
+        direct_signnorm_logsign_exact_once_recovered_first64 - GOOGLE_LOW_QUBIT_TOFFOLI as f64;
+    let direct_signnorm_logsign_exact_once_recovered_gap =
+        direct_signnorm_logsign_exact_once_recovered_p99 as isize
+            - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
     let direct_signnorm_mbu_degree_n14 = 13usize;
     let direct_signnorm_mbu_density_n14 = 8_208usize;
     let direct_signnorm_mbu_max_count_n14 = 8usize;
@@ -1896,6 +1913,13 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_direct_signnorm_logsign_split_mean={direct_signnorm_logsign_split_mean:.3}");
     println!("METRIC scratch600_direct_signnorm_logsign_once_first64={direct_signnorm_logsign_once_first64:.3}");
     println!("METRIC scratch600_direct_signnorm_logsign_split_first64={direct_signnorm_logsign_split_first64:.3}");
+    println!("METRIC scratch600_direct_signnorm_logsign_recovery_roundtrip_per_step={direct_signnorm_logsign_recovery_roundtrip_per_step}");
+    println!("METRIC scratch600_direct_signnorm_logsign_recovery_cost_mean={direct_signnorm_logsign_recovery_cost_mean:.3}");
+    println!("METRIC scratch600_direct_signnorm_logsign_recovery_cost_first64={direct_signnorm_logsign_recovery_cost_first64:.3}");
+    println!("METRIC scratch600_direct_signnorm_logsign_recovery_cost_p99={direct_signnorm_logsign_recovery_cost_p99}");
+    println!("METRIC scratch600_direct_signnorm_logsign_once_recovered_mean={direct_signnorm_logsign_once_recovered_mean:.3}");
+    println!("METRIC scratch600_direct_signnorm_logsign_once_recovered_first64={direct_signnorm_logsign_once_recovered_first64:.3}");
+    println!("METRIC scratch600_direct_signnorm_logsign_once_recovered_p99={direct_signnorm_logsign_once_recovered_p99}");
     println!("METRIC scratch600_direct_signnorm_logsign_once_p99={direct_signnorm_logsign_once_p99}");
     println!("METRIC scratch600_direct_signnorm_logsign_split_p99={direct_signnorm_logsign_split_p99}");
     println!("METRIC scratch600_direct_signnorm_logsign_direct_rem_toy_ccx={direct_signnorm_logsign_direct_rem_toy_ccx}");
@@ -1907,6 +1931,9 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_direct_signnorm_logsign_exact_split_mean={direct_signnorm_logsign_exact_split_mean:.3}");
     println!("METRIC scratch600_direct_signnorm_logsign_exact_once_first64={direct_signnorm_logsign_exact_once_first64:.3}");
     println!("METRIC scratch600_direct_signnorm_logsign_exact_split_first64={direct_signnorm_logsign_exact_split_first64:.3}");
+    println!("METRIC scratch600_direct_signnorm_logsign_exact_once_recovered_mean={direct_signnorm_logsign_exact_once_recovered_mean:.3}");
+    println!("METRIC scratch600_direct_signnorm_logsign_exact_once_recovered_first64={direct_signnorm_logsign_exact_once_recovered_first64:.3}");
+    println!("METRIC scratch600_direct_signnorm_logsign_exact_once_recovered_p99={direct_signnorm_logsign_exact_once_recovered_p99}");
     println!("METRIC scratch600_direct_signnorm_logsign_exact_once_p99={direct_signnorm_logsign_exact_once_p99}");
     println!("METRIC scratch600_direct_signnorm_logsign_exact_split_p99={direct_signnorm_logsign_exact_split_p99}");
     println!("METRIC scratch600_direct_signnorm_logsign_no_rem_cneg_projection_p99={direct_signnorm_logsign_no_rem_cneg_projection_p99}");
@@ -1914,6 +1941,9 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_direct_signnorm_logsign_split_gap_to_2700k={direct_signnorm_logsign_split_gap}");
     println!("METRIC scratch600_direct_signnorm_logsign_exact_once_mean_gap_to_2700k={direct_signnorm_logsign_exact_once_mean_gap:.3}");
     println!("METRIC scratch600_direct_signnorm_logsign_exact_once_first64_gap_to_2700k={direct_signnorm_logsign_exact_once_first64_gap:.3}");
+    println!("METRIC scratch600_direct_signnorm_logsign_exact_once_recovered_mean_gap_to_2700k={direct_signnorm_logsign_exact_once_recovered_mean_gap:.3}");
+    println!("METRIC scratch600_direct_signnorm_logsign_exact_once_recovered_first64_gap_to_2700k={direct_signnorm_logsign_exact_once_recovered_first64_gap:.3}");
+    println!("METRIC scratch600_direct_signnorm_logsign_exact_once_recovered_gap_to_2700k={direct_signnorm_logsign_exact_once_recovered_gap}");
     println!("METRIC scratch600_direct_signnorm_logsign_exact_once_gap_to_2700k={direct_signnorm_logsign_exact_once_gap}");
     println!("METRIC scratch600_direct_signnorm_logsign_exact_split_gap_to_2700k={direct_signnorm_logsign_exact_split_gap}");
     println!("METRIC scratch600_direct_signnorm_logsign_no_rem_cneg_gap_to_2700k={direct_signnorm_logsign_no_rem_cneg_gap}");
@@ -3097,6 +3127,12 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
         direct_signnorm_logsign_exact_once_mean_gap < 0.0
             && direct_signnorm_logsign_exact_once_first64_gap < 0.0,
         "logical coefficient signs stopped clearing the average harness metric"
+    );
+    assert!(
+        direct_signnorm_logsign_exact_once_recovered_mean_gap < 0.0
+            && direct_signnorm_logsign_exact_once_recovered_first64_gap < 0.0
+            && direct_signnorm_logsign_exact_once_recovered_gap > 0,
+        "recovery-charged logical coefficient signs changed promotion status"
     );
     assert!(
         direct_signnorm_logsign_direct_rem_toy_ccx == 148

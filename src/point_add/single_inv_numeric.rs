@@ -20164,10 +20164,14 @@ mod tests {
             .collect::<Vec<_>>();
         let cneg257 = cneg_costs[257];
         let exact_cneg257 = exact_cneg_costs[257];
+        let det_low2_recovery_roundtrip_per_step = 2 * 14usize;
         let mut logical_split_static = Vec::with_capacity(samples);
         let mut logical_once_static = Vec::with_capacity(samples);
         let mut exact_logical_split_static = Vec::with_capacity(samples);
         let mut exact_logical_once_static = Vec::with_capacity(samples);
+        let mut logical_once_recovered_static = Vec::with_capacity(samples);
+        let mut exact_logical_once_recovered_static = Vec::with_capacity(samples);
+        let mut recovery_costs = Vec::with_capacity(samples);
         let mut norm_counts = Vec::with_capacity(samples);
         let mut norm_rem_costs = Vec::with_capacity(samples);
         let mut exact_norm_rem_costs = Vec::with_capacity(samples);
@@ -20176,10 +20180,16 @@ mod tests {
         let mut logical_split_sum = 0i128;
         let mut exact_logical_once_sum = 0i128;
         let mut exact_logical_split_sum = 0i128;
+        let mut logical_once_recovered_sum = 0i128;
+        let mut exact_logical_once_recovered_sum = 0i128;
+        let mut recovery_cost_sum = 0i128;
         let mut logical_once_first64_sum = 0i128;
         let mut logical_split_first64_sum = 0i128;
         let mut exact_logical_once_first64_sum = 0i128;
         let mut exact_logical_split_first64_sum = 0i128;
+        let mut logical_once_recovered_first64_sum = 0i128;
+        let mut exact_logical_once_recovered_first64_sum = 0i128;
+        let mut recovery_cost_first64_sum = 0i128;
         for sample_idx in 0..samples {
             let mut x = rand_u256(&mut rng);
             if x.is_zero() {
@@ -20302,20 +20312,33 @@ mod tests {
                 + 2 * (3 * coeff_width_cost + exact_norm_rem_cost + 2 * extraction_oneway) as isize;
             let exact_logical_split = 642_716isize
                 + 2 * (3 * coeff_width_cost + 2 * (extraction_oneway + exact_norm_rem_cost)) as isize;
+            let recovery_cost = det_low2_recovery_roundtrip_per_step * count;
+            let logical_once_recovered = logical_once + 2 * recovery_cost as isize;
+            let exact_logical_once_recovered = exact_logical_once + 2 * recovery_cost as isize;
             logical_once_sum += logical_once as i128;
             logical_split_sum += logical_split as i128;
             exact_logical_once_sum += exact_logical_once as i128;
             exact_logical_split_sum += exact_logical_split as i128;
+            logical_once_recovered_sum += logical_once_recovered as i128;
+            exact_logical_once_recovered_sum += exact_logical_once_recovered as i128;
+            recovery_cost_sum += recovery_cost as i128;
             if sample_idx < 64 {
                 logical_once_first64_sum += logical_once as i128;
                 logical_split_first64_sum += logical_split as i128;
                 exact_logical_once_first64_sum += exact_logical_once as i128;
                 exact_logical_split_first64_sum += exact_logical_split as i128;
+                logical_once_recovered_first64_sum += logical_once_recovered as i128;
+                exact_logical_once_recovered_first64_sum +=
+                    exact_logical_once_recovered as i128;
+                recovery_cost_first64_sum += recovery_cost as i128;
             }
             logical_once_static.push(logical_once);
             logical_split_static.push(logical_split);
             exact_logical_once_static.push(exact_logical_once);
             exact_logical_split_static.push(exact_logical_split);
+            logical_once_recovered_static.push(logical_once_recovered);
+            exact_logical_once_recovered_static.push(exact_logical_once_recovered);
+            recovery_costs.push(recovery_cost);
             norm_counts.push(norm_count);
             norm_rem_costs.push(norm_rem_cost);
             exact_norm_rem_costs.push(exact_norm_rem_cost);
@@ -20325,6 +20348,9 @@ mod tests {
         logical_split_static.sort_unstable();
         exact_logical_once_static.sort_unstable();
         exact_logical_split_static.sort_unstable();
+        logical_once_recovered_static.sort_unstable();
+        exact_logical_once_recovered_static.sort_unstable();
+        recovery_costs.sort_unstable();
         norm_counts.sort_unstable();
         norm_rem_costs.sort_unstable();
         exact_norm_rem_costs.sort_unstable();
@@ -20334,6 +20360,9 @@ mod tests {
         let logical_split_p99 = logical_split_static[p99];
         let exact_logical_once_p99 = exact_logical_once_static[p99];
         let exact_logical_split_p99 = exact_logical_split_static[p99];
+        let logical_once_recovered_p99 = logical_once_recovered_static[p99];
+        let exact_logical_once_recovered_p99 = exact_logical_once_recovered_static[p99];
+        let recovery_cost_p99 = recovery_costs[p99];
         let norm_count_p99 = norm_counts[p99];
         let norm_count_max = *norm_counts.last().unwrap();
         let norm_rem_p99 = norm_rem_costs[p99];
@@ -20343,24 +20372,50 @@ mod tests {
         let logical_split_mean = logical_split_sum as f64 / samples as f64;
         let exact_logical_once_mean = exact_logical_once_sum as f64 / samples as f64;
         let exact_logical_split_mean = exact_logical_split_sum as f64 / samples as f64;
+        let logical_once_recovered_mean =
+            logical_once_recovered_sum as f64 / samples as f64;
+        let exact_logical_once_recovered_mean =
+            exact_logical_once_recovered_sum as f64 / samples as f64;
+        let recovery_cost_mean = recovery_cost_sum as f64 / samples as f64;
         let logical_once_first64 = logical_once_first64_sum as f64 / 64.0;
         let logical_split_first64 = logical_split_first64_sum as f64 / 64.0;
         let exact_logical_once_first64 = exact_logical_once_first64_sum as f64 / 64.0;
         let exact_logical_split_first64 = exact_logical_split_first64_sum as f64 / 64.0;
+        let logical_once_recovered_first64 =
+            logical_once_recovered_first64_sum as f64 / 64.0;
+        let exact_logical_once_recovered_first64 =
+            exact_logical_once_recovered_first64_sum as f64 / 64.0;
+        let recovery_cost_first64 = recovery_cost_first64_sum as f64 / 64.0;
         let logical_once_gap = logical_once_p99 - 2_700_000isize;
         let logical_split_gap = logical_split_p99 - 2_700_000isize;
         let exact_logical_once_gap = exact_logical_once_p99 - 2_700_000isize;
         let exact_logical_split_gap = exact_logical_split_p99 - 2_700_000isize;
+        let logical_once_recovered_gap =
+            logical_once_recovered_p99 - 2_700_000isize;
+        let exact_logical_once_recovered_gap =
+            exact_logical_once_recovered_p99 - 2_700_000isize;
         let logical_once_mean_gap = logical_once_mean - 2_700_000.0;
         let logical_split_mean_gap = logical_split_mean - 2_700_000.0;
         let exact_logical_once_mean_gap = exact_logical_once_mean - 2_700_000.0;
         let exact_logical_split_mean_gap = exact_logical_split_mean - 2_700_000.0;
+        let logical_once_recovered_mean_gap =
+            logical_once_recovered_mean - 2_700_000.0;
+        let exact_logical_once_recovered_mean_gap =
+            exact_logical_once_recovered_mean - 2_700_000.0;
         let logical_once_first64_gap = logical_once_first64 - 2_700_000.0;
         let logical_split_first64_gap = logical_split_first64 - 2_700_000.0;
         let exact_logical_once_first64_gap = exact_logical_once_first64 - 2_700_000.0;
         let exact_logical_split_first64_gap = exact_logical_split_first64 - 2_700_000.0;
+        let logical_once_recovered_first64_gap =
+            logical_once_recovered_first64 - 2_700_000.0;
+        let exact_logical_once_recovered_first64_gap =
+            exact_logical_once_recovered_first64 - 2_700_000.0;
         println!("METRIC centered_direct_logsign_cneg257={cneg257}");
         println!("METRIC centered_direct_logsign_exact_cneg257={exact_cneg257}");
+        println!("METRIC centered_direct_logsign_det_low2_recovery_roundtrip_per_step={det_low2_recovery_roundtrip_per_step}");
+        println!("METRIC centered_direct_logsign_recovery_cost_mean={recovery_cost_mean:.3}");
+        println!("METRIC centered_direct_logsign_recovery_cost_first64={recovery_cost_first64:.3}");
+        println!("METRIC centered_direct_logsign_recovery_cost_p99={recovery_cost_p99}");
         println!("METRIC centered_direct_logsign_coeff_width_p99={coeff_width_p99}");
         println!("METRIC centered_direct_logsign_norm_count_p99={norm_count_p99}");
         println!("METRIC centered_direct_logsign_norm_count_max={norm_count_max}");
@@ -20384,19 +20439,36 @@ mod tests {
         println!("METRIC centered_direct_logsign_exact_split_first64={exact_logical_split_first64:.3}");
         println!("METRIC centered_direct_logsign_exact_once_p99={exact_logical_once_p99}");
         println!("METRIC centered_direct_logsign_exact_split_p99={exact_logical_split_p99}");
+        println!("METRIC centered_direct_logsign_once_recovered_mean={logical_once_recovered_mean:.3}");
+        println!("METRIC centered_direct_logsign_once_recovered_first64={logical_once_recovered_first64:.3}");
+        println!("METRIC centered_direct_logsign_once_recovered_p99={logical_once_recovered_p99}");
+        println!("METRIC centered_direct_logsign_exact_once_recovered_mean={exact_logical_once_recovered_mean:.3}");
+        println!("METRIC centered_direct_logsign_exact_once_recovered_first64={exact_logical_once_recovered_first64:.3}");
+        println!("METRIC centered_direct_logsign_exact_once_recovered_p99={exact_logical_once_recovered_p99}");
         println!("METRIC centered_direct_logsign_exact_once_mean_gap_to_2700k={exact_logical_once_mean_gap:.3}");
         println!("METRIC centered_direct_logsign_exact_split_mean_gap_to_2700k={exact_logical_split_mean_gap:.3}");
         println!("METRIC centered_direct_logsign_exact_once_first64_gap_to_2700k={exact_logical_once_first64_gap:.3}");
         println!("METRIC centered_direct_logsign_exact_split_first64_gap_to_2700k={exact_logical_split_first64_gap:.3}");
+        println!("METRIC centered_direct_logsign_once_recovered_mean_gap_to_2700k={logical_once_recovered_mean_gap:.3}");
+        println!("METRIC centered_direct_logsign_once_recovered_first64_gap_to_2700k={logical_once_recovered_first64_gap:.3}");
+        println!("METRIC centered_direct_logsign_once_recovered_gap_to_2700k={logical_once_recovered_gap}");
+        println!("METRIC centered_direct_logsign_exact_once_recovered_mean_gap_to_2700k={exact_logical_once_recovered_mean_gap:.3}");
+        println!("METRIC centered_direct_logsign_exact_once_recovered_first64_gap_to_2700k={exact_logical_once_recovered_first64_gap:.3}");
+        println!("METRIC centered_direct_logsign_exact_once_recovered_gap_to_2700k={exact_logical_once_recovered_gap}");
         println!("METRIC centered_direct_logsign_exact_once_gap_to_2700k={exact_logical_once_gap}");
         println!("METRIC centered_direct_logsign_exact_split_gap_to_2700k={exact_logical_split_gap}");
         eprintln!(
-            "Direct-centered logical coeff-sign budget: cneg257={cneg257}, exact_cneg257={exact_cneg257}, coeff_width_p99={coeff_width_p99}, norm_count_p99={norm_count_p99}, norm_count_max={norm_count_max}, rem_p99={norm_rem_p99}, exact_rem_p99={exact_norm_rem_p99}, once_mean={logical_once_mean:.1}, first64={logical_once_first64:.1}, once_p99={logical_once_p99}, split_p99={logical_split_p99}, once_gap={logical_once_gap}, split_gap={logical_split_gap}, exact_once_mean={exact_logical_once_mean:.1}, exact_first64={exact_logical_once_first64:.1}, exact_once_p99={exact_logical_once_p99}, exact_split_p99={exact_logical_split_p99}, exact_once_gap={exact_logical_once_gap}, exact_split_gap={exact_logical_split_gap}"
+            "Direct-centered logical coeff-sign budget: cneg257={cneg257}, exact_cneg257={exact_cneg257}, coeff_width_p99={coeff_width_p99}, norm_count_p99={norm_count_p99}, norm_count_max={norm_count_max}, recovery_mean={recovery_cost_mean:.1}, recovery_p99={recovery_cost_p99}, rem_p99={norm_rem_p99}, exact_rem_p99={exact_norm_rem_p99}, once_mean={logical_once_mean:.1}, first64={logical_once_first64:.1}, once_p99={logical_once_p99}, split_p99={logical_split_p99}, once_recovered_mean={logical_once_recovered_mean:.1}, exact_once_recovered_mean={exact_logical_once_recovered_mean:.1}, once_gap={logical_once_gap}, split_gap={logical_split_gap}, exact_once_mean={exact_logical_once_mean:.1}, exact_first64={exact_logical_once_first64:.1}, exact_once_p99={exact_logical_once_p99}, exact_split_p99={exact_logical_split_p99}, exact_recovered_p99={exact_logical_once_recovered_p99}, exact_once_gap={exact_logical_once_gap}, exact_split_gap={exact_logical_split_gap}"
         );
         assert!(norm_count_p99 > 0, "logical-sign normalization never fired");
         assert!(
             exact_logical_once_mean < 2_700_000.0 && exact_logical_once_first64 < 2_700_000.0,
             "exact-rem logical-sign average stopped fitting the harness objective"
+        );
+        assert!(
+            exact_logical_once_recovered_mean < 2_700_000.0
+                && exact_logical_once_recovered_first64 < 2_700_000.0,
+            "recovery-charged exact-rem logical-sign average stopped fitting the harness objective"
         );
         assert!(
             logical_once_gap > 0 && logical_split_gap > 0,
