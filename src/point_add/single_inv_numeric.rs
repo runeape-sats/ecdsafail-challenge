@@ -20578,6 +20578,229 @@ mod tests {
     }
 
     #[test]
+    fn direct_centered_restoring_final_branch_as_final_digit_budget_probe() {
+        // The stored-alignment model charges every ambiguous low/high reverse
+        // coefficient branch as a full width-wide conditional selection.  But
+        // high_numer = low_numer + denom, so an ambiguous high branch should
+        // differ from the low quotient by exactly one.  This prices the
+        // optimistic structural escape: decode the low candidate and treat the
+        // branch bit as an extra restoring-final quotient digit, before any
+        // phase-clean circuit for that fold has been built.
+        const TARGET: f64 = 2_700_000.0;
+        const STORED_BRANCH_MEAN: f64 = 2_645_270.0;
+        const MIXED4TO8_TOUCH_MEAN: f64 = 2_260.848;
+        const COND_BRANCH_BINARY_LOOKUP_MEAN: f64 = 6_795.760;
+        let p = SECP256K1_P;
+        let samples = 8192usize;
+        let mut rng = 0xd1ce_c0ef_a119_0001u64;
+        let mut branch_select_rows = Vec::with_capacity(samples);
+        let mut branch_final_width_rows = Vec::with_capacity(samples);
+        let mut branch_final_width_minus1_rows = Vec::with_capacity(samples);
+        let mut selected_width_saving_rows = Vec::with_capacity(samples);
+        let mut low_path_width_saving_rows = Vec::with_capacity(samples);
+        let mut low_path_width_minus1_saving_rows = Vec::with_capacity(samples);
+        let mut low_extra_touch_rows = Vec::with_capacity(samples);
+        let mut branch_count_rows = Vec::with_capacity(samples);
+        let mut high_branch_rows = Vec::with_capacity(samples);
+        let mut alignment_diff_rows = Vec::with_capacity(samples);
+        let mut digit_len_diff_rows = Vec::with_capacity(samples);
+        let mut high_adjacent_violations = 0usize;
+
+        for _ in 0..samples {
+            let mut x = rand_u256(&mut rng);
+            if x.is_zero() {
+                x = U256::from(1u64);
+            }
+            let mut u = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(p));
+            let mut v = smag_for_halfgcd_test(false, u512_from_u256_for_halfgcd_test(x));
+            let mut coeff_u = smag_for_halfgcd_test(false, U512::ZERO);
+            let mut coeff_v = smag_for_halfgcd_test(false, U512::from(1u64));
+            let mut selected_decoder_touch = 0usize;
+            let mut low_decoder_touch = 0usize;
+            let mut branch_select = 0usize;
+            let mut branch_final_width = 0usize;
+            let mut branch_final_width_minus1 = 0usize;
+            let mut branch_count = 0usize;
+            let mut high_branch_count = 0usize;
+            let mut alignment_diff_count = 0usize;
+            let mut digit_len_diff_count = 0usize;
+
+            while !v.mag.is_zero() {
+                let adjusted = u.mag + (v.mag >> 1usize);
+                let q_direct = adjusted / v.mag;
+                let q_neg = u.neg ^ v.neg;
+                let qv = signed_mul_mag_for_halfgcd_test(v, q_neg, q_direct);
+                let next_v = signed_add_for_halfgcd_test(u, signed_neg_for_halfgcd_test(qv));
+                let qv_coeff = signed_mul_mag_for_halfgcd_test(coeff_v, q_neg, q_direct);
+                let next_coeff_v = signed_add_for_halfgcd_test(
+                    coeff_u,
+                    signed_neg_for_halfgcd_test(qv_coeff),
+                );
+
+                let denom = coeff_v.mag;
+                assert!(!denom.is_zero(), "restoring-final coefficient denominator vanished");
+                let low_numer = if coeff_u.mag.is_zero() {
+                    next_coeff_v.mag
+                } else {
+                    assert!(
+                        !next_coeff_v.mag.is_zero(),
+                        "restoring-final adjusted coefficient numerator underflow"
+                    );
+                    next_coeff_v.mag - U512::from(1u64)
+                };
+                let high_numer = if coeff_u.mag.is_zero() {
+                    low_numer
+                } else {
+                    next_coeff_v.mag + denom - U512::from(1u64)
+                };
+                let low_q = low_numer / denom;
+                let high_q = high_numer / denom;
+                let high_branch = q_direct != low_q;
+                let selected_numer = if high_branch {
+                    assert_eq!(
+                        q_direct, high_q,
+                        "restoring-final coefficient reverse quotient candidates missed"
+                    );
+                    high_numer
+                } else {
+                    assert_eq!(
+                        q_direct, low_q,
+                        "restoring-final coefficient low reverse quotient missed"
+                    );
+                    low_numer
+                };
+
+                let selected_digits =
+                    nonrestoring_floor_restoring_final_digits_for_centered_test(
+                        selected_numer,
+                        denom,
+                    );
+                let low_digits =
+                    nonrestoring_floor_restoring_final_digits_for_centered_test(low_numer, denom);
+                let denom_width = u512_bit_len_for_halfgcd_test(denom);
+                let selected_width = u512_bit_len_for_halfgcd_test(selected_numer)
+                    .max(denom_width)
+                    .max(1);
+                let low_width = u512_bit_len_for_halfgcd_test(low_numer)
+                    .max(denom_width)
+                    .max(1);
+                let selected_alignment = u512_bit_len_for_halfgcd_test(selected_numer)
+                    .saturating_sub(denom_width);
+                let low_alignment =
+                    u512_bit_len_for_halfgcd_test(low_numer).saturating_sub(denom_width);
+                selected_decoder_touch +=
+                    selected_digits.len() * selected_width.saturating_sub(1)
+                        + selected_width * selected_alignment.count_ones() as usize;
+                low_decoder_touch += low_digits.len() * low_width.saturating_sub(1)
+                    + low_width * low_alignment.count_ones() as usize;
+                alignment_diff_count += (selected_alignment != low_alignment) as usize;
+                digit_len_diff_count += (selected_digits.len() != low_digits.len()) as usize;
+
+                if low_q != high_q {
+                    branch_count += 1;
+                    high_branch_count += high_branch as usize;
+                    if high_q != low_q + U512::from(1u64) {
+                        high_adjacent_violations += 1;
+                    }
+                    branch_select += (2 * selected_width).saturating_sub(1);
+                    branch_final_width += selected_width;
+                    branch_final_width_minus1 += selected_width.saturating_sub(1);
+                }
+
+                u = v;
+                v = next_v;
+                coeff_u = coeff_v;
+                coeff_v = next_coeff_v;
+            }
+
+            assert_eq!(u.mag, U512::from(1u64), "restoring-final trace ended at non-unit gcd");
+            let selected_width_saving =
+                branch_select as isize - branch_final_width as isize;
+            let low_path_width_saving = (selected_decoder_touch + branch_select) as isize
+                - (low_decoder_touch + branch_final_width) as isize;
+            let low_path_width_minus1_saving = (selected_decoder_touch + branch_select) as isize
+                - (low_decoder_touch + branch_final_width_minus1) as isize;
+            branch_select_rows.push(branch_select);
+            branch_final_width_rows.push(branch_final_width);
+            branch_final_width_minus1_rows.push(branch_final_width_minus1);
+            selected_width_saving_rows.push(selected_width_saving);
+            low_path_width_saving_rows.push(low_path_width_saving);
+            low_path_width_minus1_saving_rows.push(low_path_width_minus1_saving);
+            low_extra_touch_rows.push(low_decoder_touch as isize - selected_decoder_touch as isize);
+            branch_count_rows.push(branch_count);
+            high_branch_rows.push(high_branch_count);
+            alignment_diff_rows.push(alignment_diff_count);
+            digit_len_diff_rows.push(digit_len_diff_count);
+        }
+
+        let mean_usize = |rows: &[usize]| -> f64 {
+            rows.iter().map(|&v| v as f64).sum::<f64>() / rows.len() as f64
+        };
+        let mean_isize = |rows: &[isize]| -> f64 {
+            rows.iter().map(|&v| v as f64).sum::<f64>() / rows.len() as f64
+        };
+        let p99_usize = |rows: &mut Vec<usize>| -> usize {
+            rows.sort_unstable();
+            rows[rows.len() * 99 / 100]
+        };
+        let branch_select_mean = mean_usize(&branch_select_rows);
+        let branch_final_width_mean = mean_usize(&branch_final_width_rows);
+        let branch_final_width_minus1_mean = mean_usize(&branch_final_width_minus1_rows);
+        let selected_width_saving_mean = mean_isize(&selected_width_saving_rows);
+        let low_path_width_saving_mean = mean_isize(&low_path_width_saving_rows);
+        let low_path_width_minus1_saving_mean = mean_isize(&low_path_width_minus1_saving_rows);
+        let low_extra_touch_mean = mean_isize(&low_extra_touch_rows);
+        let branch_count_mean = mean_usize(&branch_count_rows);
+        let high_branch_mean = mean_usize(&high_branch_rows);
+        let branch_select_p99 = p99_usize(&mut branch_select_rows);
+        let branch_final_width_p99 = p99_usize(&mut branch_final_width_rows);
+        let branch_count_p99 = p99_usize(&mut branch_count_rows);
+        let high_branch_p99 = p99_usize(&mut high_branch_rows);
+        let alignment_diff_p99 = p99_usize(&mut alignment_diff_rows);
+        let digit_len_diff_p99 = p99_usize(&mut digit_len_diff_rows);
+        let current_mixed4to8_gap = STORED_BRANCH_MEAN
+            + 4.0 * (MIXED4TO8_TOUCH_MEAN + 2.0 * COND_BRANCH_BINARY_LOOKUP_MEAN)
+            - TARGET;
+        let selected_width_gap = current_mixed4to8_gap - 4.0 * selected_width_saving_mean;
+        let low_path_width_gap = current_mixed4to8_gap - 4.0 * low_path_width_saving_mean;
+        let low_path_width_minus1_gap =
+            current_mixed4to8_gap - 4.0 * low_path_width_minus1_saving_mean;
+
+        println!("METRIC centered_direct_restoring_final_branch_final_current_branch_select_mean={branch_select_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_branch_final_current_branch_select_p99={branch_select_p99}");
+        println!("METRIC centered_direct_restoring_final_branch_final_width_mean={branch_final_width_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_branch_final_width_p99={branch_final_width_p99}");
+        println!("METRIC centered_direct_restoring_final_branch_final_width_minus1_mean={branch_final_width_minus1_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_branch_final_selected_width_saving_mean={selected_width_saving_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_branch_final_low_path_width_saving_mean={low_path_width_saving_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_branch_final_low_path_width_minus1_saving_mean={low_path_width_minus1_saving_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_branch_final_low_extra_touch_mean={low_extra_touch_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_branch_final_branch_count_mean={branch_count_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_branch_final_branch_count_p99={branch_count_p99}");
+        println!("METRIC centered_direct_restoring_final_branch_final_high_branch_mean={high_branch_mean:.3}");
+        println!("METRIC centered_direct_restoring_final_branch_final_high_branch_p99={high_branch_p99}");
+        println!("METRIC centered_direct_restoring_final_branch_final_alignment_diff_p99={alignment_diff_p99}");
+        println!("METRIC centered_direct_restoring_final_branch_final_digit_len_diff_p99={digit_len_diff_p99}");
+        println!("METRIC centered_direct_restoring_final_branch_final_high_adjacent_violations={high_adjacent_violations}");
+        println!("METRIC centered_direct_restoring_final_branch_final_current_mixed4to8_gap_to_2700k={current_mixed4to8_gap:.3}");
+        println!("METRIC centered_direct_restoring_final_branch_final_selected_width_mixed4to8_gap_to_2700k={selected_width_gap:.3}");
+        println!("METRIC centered_direct_restoring_final_branch_final_low_path_width_mixed4to8_gap_to_2700k={low_path_width_gap:.3}");
+        println!("METRIC centered_direct_restoring_final_branch_final_low_path_width_minus1_mixed4to8_gap_to_2700k={low_path_width_minus1_gap:.3}");
+        eprintln!(
+            "Direct-centered restoring-final branch final-digit probe: current_branch={branch_select_mean:.1}, final_width={branch_final_width_mean:.1}, selected_saving={selected_width_saving_mean:.1}, low_path_saving={low_path_width_saving_mean:.1}, gaps=({selected_width_gap:.1},{low_path_width_gap:.1}), branch_count_p99={branch_count_p99}, high_adjacent_violations={high_adjacent_violations}"
+        );
+
+        assert_eq!(
+            high_adjacent_violations, 0,
+            "ambiguous high branch is not a +1 quotient digit"
+        );
+        assert!(
+            selected_width_gap < 0.0 && low_path_width_gap < 0.0,
+            "branch-as-final-digit lower bound no longer clears the mixed 4..8 parser budget"
+        );
+    }
+
+    #[test]
     fn direct_centered_restoring_final_alignment_public_len_predictor_still_needs_sidecar() {
         // The raw variable alignment stream fits only if the parser knows each
         // per-step payload length.  Give the parser a very generous public

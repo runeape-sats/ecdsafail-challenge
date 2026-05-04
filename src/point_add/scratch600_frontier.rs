@@ -154,6 +154,12 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             blocker: "period-4 code-8656 mixed 4..8 branch-conditioned blocks fit 663 scratch and reduce the 2x binary lookup miss to 8680 Toffoli, but still require sub-1.681x lookup cleanup; selective adjacent-pair grouping saves only 26.9 of 1084.9 needed, and coherent full-tree lookup still misses",
         },
         Candidate {
+            name: "direct_centered_restoring_final_low_branch_digit_mixed4to8_floor",
+            scratch_bits: 663,
+            charged_toffoli: Some(2_643_614),
+            blocker: "low-candidate branch-as-final-digit lower bound clears by 56386 and high_q=low_q+1 on the sample set, but no phase-clean controlled final-digit fold through reverse coefficient decoding and parser cleanup has been built",
+        },
+        Candidate {
             name: "direct_centered_restoring_final_mixed4to8_joint_binary_floor",
             scratch_bits: 663,
             charged_toffoli: Some(2_693_369),
@@ -465,6 +471,26 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let direct_restoring_final_stored_align_pop_barrel_p99 = 19_928usize;
     let direct_restoring_final_stored_align_branch_select_p99 = 31_033usize;
     let direct_restoring_final_stored_align_branch_count_p99 = 117usize;
+    let direct_restoring_final_branch_final_current_branch_select_mean = 26_960.072f64;
+    let direct_restoring_final_branch_final_current_branch_select_p99 = 31_033usize;
+    let direct_restoring_final_branch_final_width_mean = 13_531.836f64;
+    let direct_restoring_final_branch_final_width_p99 = 15_573usize;
+    let direct_restoring_final_branch_final_width_minus1_mean = 13_428.236f64;
+    let direct_restoring_final_branch_final_selected_width_saving_mean = 13_428.236f64;
+    let direct_restoring_final_branch_final_low_path_width_saving_mean = 16_266.246f64;
+    let direct_restoring_final_branch_final_low_path_width_minus1_saving_mean = 16_369.846f64;
+    let direct_restoring_final_branch_final_low_extra_touch_mean = -2_838.010f64;
+    let direct_restoring_final_branch_final_branch_count_mean = 103.600f64;
+    let direct_restoring_final_branch_final_branch_count_p99 = 117usize;
+    let direct_restoring_final_branch_final_high_branch_mean = 45.614f64;
+    let direct_restoring_final_branch_final_high_branch_p99 = 59usize;
+    let direct_restoring_final_branch_final_alignment_diff_p99 = 26usize;
+    let direct_restoring_final_branch_final_digit_len_diff_p99 = 38usize;
+    let direct_restoring_final_branch_final_high_adjacent_violations = 0usize;
+    let direct_restoring_final_branch_final_current_mixed4to8_gap = 8_679.472f64;
+    let direct_restoring_final_branch_final_selected_width_mixed4to8_gap = -45_033.471f64;
+    let direct_restoring_final_branch_final_low_path_width_mixed4to8_gap = -56_385.513f64;
+    let direct_restoring_final_branch_final_low_path_width_minus1_mixed4to8_gap = -56_799.914f64;
     let direct_restoring_final_coeff_decoder_alignment_degree_n14 = 13usize;
     let direct_restoring_final_coeff_decoder_alignment_density_n14 = 8_278usize;
     let direct_restoring_final_coeff_decoder_alignment_max_n14 = 13usize;
@@ -1232,6 +1258,26 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_direct_restoring_final_stored_align_pop_barrel_p99={direct_restoring_final_stored_align_pop_barrel_p99}");
     println!("METRIC scratch600_direct_restoring_final_stored_align_branch_select_p99={direct_restoring_final_stored_align_branch_select_p99}");
     println!("METRIC scratch600_direct_restoring_final_stored_align_branch_count_p99={direct_restoring_final_stored_align_branch_count_p99}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_current_branch_select_mean={direct_restoring_final_branch_final_current_branch_select_mean:.3}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_current_branch_select_p99={direct_restoring_final_branch_final_current_branch_select_p99}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_width_mean={direct_restoring_final_branch_final_width_mean:.3}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_width_p99={direct_restoring_final_branch_final_width_p99}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_width_minus1_mean={direct_restoring_final_branch_final_width_minus1_mean:.3}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_selected_width_saving_mean={direct_restoring_final_branch_final_selected_width_saving_mean:.3}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_low_path_width_saving_mean={direct_restoring_final_branch_final_low_path_width_saving_mean:.3}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_low_path_width_minus1_saving_mean={direct_restoring_final_branch_final_low_path_width_minus1_saving_mean:.3}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_low_extra_touch_mean={direct_restoring_final_branch_final_low_extra_touch_mean:.3}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_branch_count_mean={direct_restoring_final_branch_final_branch_count_mean:.3}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_branch_count_p99={direct_restoring_final_branch_final_branch_count_p99}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_high_branch_mean={direct_restoring_final_branch_final_high_branch_mean:.3}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_high_branch_p99={direct_restoring_final_branch_final_high_branch_p99}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_alignment_diff_p99={direct_restoring_final_branch_final_alignment_diff_p99}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_digit_len_diff_p99={direct_restoring_final_branch_final_digit_len_diff_p99}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_high_adjacent_violations={direct_restoring_final_branch_final_high_adjacent_violations}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_current_mixed4to8_gap_to_2700k={direct_restoring_final_branch_final_current_mixed4to8_gap:.3}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_selected_width_mixed4to8_gap_to_2700k={direct_restoring_final_branch_final_selected_width_mixed4to8_gap:.3}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_low_path_width_mixed4to8_gap_to_2700k={direct_restoring_final_branch_final_low_path_width_mixed4to8_gap:.3}");
+    println!("METRIC scratch600_direct_restoring_final_branch_final_low_path_width_minus1_mixed4to8_gap_to_2700k={direct_restoring_final_branch_final_low_path_width_minus1_mixed4to8_gap:.3}");
     println!("METRIC scratch600_direct_restoring_final_coeff_decoder_alignment_degree_n14={direct_restoring_final_coeff_decoder_alignment_degree_n14}");
     println!("METRIC scratch600_direct_restoring_final_coeff_decoder_alignment_density_n14={direct_restoring_final_coeff_decoder_alignment_density_n14}");
     println!("METRIC scratch600_direct_restoring_final_coeff_decoder_alignment_max_n14={direct_restoring_final_coeff_decoder_alignment_max_n14}");
@@ -1899,6 +1945,22 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             && direct_restoring_final_stored_align_joint_len_position_only_p99
                 > GOOGLE_LOW_QUBIT_SCRATCH,
         "restoring-final stored-alignment metadata changed; revisit exact parser/packing blocker"
+    );
+    assert!(
+        direct_restoring_final_branch_final_high_adjacent_violations == 0
+            && direct_restoring_final_branch_final_current_branch_select_p99
+                == direct_restoring_final_stored_align_branch_select_p99
+            && direct_restoring_final_branch_final_branch_count_p99
+                == direct_restoring_final_stored_align_branch_count_p99
+            && direct_restoring_final_branch_final_selected_width_saving_mean > 13_000.0
+            && direct_restoring_final_branch_final_low_path_width_saving_mean > 16_000.0
+            && direct_restoring_final_branch_final_low_extra_touch_mean < 0.0
+            && direct_restoring_final_branch_final_selected_width_mixed4to8_gap < 0.0
+            && direct_restoring_final_branch_final_low_path_width_mixed4to8_gap < -50_000.0
+            && direct_restoring_final_branch_final_current_mixed4to8_gap > 8_000.0
+            && direct_restoring_final_branch_final_alignment_diff_p99 > 0
+            && direct_restoring_final_branch_final_digit_len_diff_p99 > 0,
+        "branch-as-final-digit restoring-final lower bound changed; revisit branch-fold circuit target"
     );
     assert!(
         direct_restoring_final_coeff_decoder_alignment_degree_n14 + 1 >= 14
