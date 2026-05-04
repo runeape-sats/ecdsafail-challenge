@@ -12872,6 +12872,48 @@ mod tests {
     }
 
     #[test]
+    fn plusminus_solinas_scale_chunk_workspace_breaks_packed_scratch_gate() {
+        // The scale-history ledger above only counts the one-bit residual per
+        // Solinas multihalve chunk.  The real k=22 chunk also needs temporary
+        // product, high-addend, and Cuccaro carry workspace.  Charge that
+        // hardest piece against the packed two-lane state before treating the
+        // plus-minus/Solinas route as a Google-low-qubit candidate.
+        const K: usize = 22;
+        const GOOGLE_SCRATCH: usize = 663;
+        const PACKED_STATE_SCRATCH: usize = 512;
+        const INPUT_LANE_BITS: usize = 256;
+        let (no_threshold_ccx, no_threshold_peak, exact_ccx, exact_peak) =
+            super::super::primitive_costs::direct_solinas_multihalve_chunk_cost_split_peak(K);
+        let primitive_extra = no_threshold_peak - INPUT_LANE_BITS;
+        let naive_overlap_scratch = PACKED_STATE_SCRATCH + primitive_extra;
+        let one_lane_reuse_scratch = naive_overlap_scratch - INPUT_LANE_BITS;
+        let naive_over_google = naive_overlap_scratch as isize - GOOGLE_SCRATCH as isize;
+        let one_lane_reuse_over_google =
+            one_lane_reuse_scratch as isize - GOOGLE_SCRATCH as isize;
+        let exact_one_lane_reuse_over_google = exact_peak as isize - GOOGLE_SCRATCH as isize;
+        println!("METRIC plusminus_solinas_scale_chunk_k={K}");
+        println!("METRIC plusminus_solinas_scale_chunk_no_threshold_ccx={no_threshold_ccx}");
+        println!("METRIC plusminus_solinas_scale_chunk_no_threshold_peak_q={no_threshold_peak}");
+        println!("METRIC plusminus_solinas_scale_chunk_exact_ccx={exact_ccx}");
+        println!("METRIC plusminus_solinas_scale_chunk_exact_peak_q={exact_peak}");
+        println!("METRIC plusminus_solinas_scale_chunk_primitive_extra_q={primitive_extra}");
+        println!("METRIC plusminus_solinas_scale_chunk_naive_overlap_scratch={naive_overlap_scratch}");
+        println!("METRIC plusminus_solinas_scale_chunk_naive_over_google_bits={naive_over_google}");
+        println!("METRIC plusminus_solinas_scale_chunk_one_lane_reuse_scratch={one_lane_reuse_scratch}");
+        println!("METRIC plusminus_solinas_scale_chunk_one_lane_reuse_over_google_bits={one_lane_reuse_over_google}");
+        println!("METRIC plusminus_solinas_scale_chunk_exact_one_lane_reuse_over_google_bits={exact_one_lane_reuse_over_google}");
+        eprintln!(
+            "plus-minus Solinas scale chunk workspace: k={K}, no_threshold_ccx={no_threshold_ccx}, peak={no_threshold_peak}, primitive_extra={primitive_extra}, naive_scratch={naive_overlap_scratch}, naive_over={naive_over_google}, one_lane_reuse_scratch={one_lane_reuse_scratch}, one_lane_reuse_over={one_lane_reuse_over_google}, exact_peak={exact_peak}"
+        );
+        assert!(
+            naive_overlap_scratch > GOOGLE_SCRATCH
+                && one_lane_reuse_scratch > GOOGLE_SCRATCH
+                && exact_peak > GOOGLE_SCRATCH,
+            "Solinas scale chunk now fits packed plus-minus scratch; revisit scale-history route"
+        );
+    }
+
+    #[test]
     fn plusminus_scaled_public_packing_map_moves_are_clifford_only() {
         // Build a deterministic slot map from the lane envelope: at each public
         // step, history bit j lives in the j-th available high slack slot across

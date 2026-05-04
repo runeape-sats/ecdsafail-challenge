@@ -124,6 +124,12 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
             blocker: "sampled active-chain/Solinas model treats quantum k-history as an executed-gate filter; emitted 257-bit active step is 138771 CCX, so two-DIV step-only is 56063484",
         },
         Candidate {
+            name: "plusminus_scaled_solinas_history_scale_packed",
+            scratch_bits: 822,
+            charged_toffoli: Some(2_230_850),
+            blocker: "optimistic Solinas history-carry scale model is gate-shaped, but the actual k22 split multihalve chunk peaks at 822q; even granting one reusable 256-bit lane remains 159 scratch bits over Google, and naive overlap is 1078 scratch",
+        },
+        Candidate {
             name: "centered_euclid_raw_q_stream_without_parser",
             scratch_bits: 592,
             charged_toffoli: None,
@@ -1182,8 +1188,21 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     let plusminus_unary_scratch_p99 = 640usize;
     let plusminus_parser_over_strict = plusminus_unary_scratch_p99 - STRICT_SCRATCH;
     let plusminus_scaled_slack_scratch_max = 517usize;
-    let plusminus_scaled_solinas_projected_max = 2_027_038usize;
+    let plusminus_scaled_solinas_projected_max = 2_230_850usize;
     let plusminus_scaled_solinas_gap_max = plusminus_scaled_solinas_projected_max as isize - GOOGLE_LOW_QUBIT_TOFFOLI as isize;
+    let plusminus_solinas_scale_chunk_no_threshold_ccx = 3_390usize;
+    let plusminus_solinas_scale_chunk_no_threshold_peak = 822usize;
+    let plusminus_solinas_scale_chunk_exact_ccx = 7_564usize;
+    let plusminus_solinas_scale_chunk_exact_peak = 822usize;
+    let plusminus_solinas_scale_chunk_primitive_extra = 566usize;
+    let plusminus_solinas_scale_chunk_naive_overlap_scratch = 1_078usize;
+    let plusminus_solinas_scale_chunk_naive_over_google =
+        plusminus_solinas_scale_chunk_naive_overlap_scratch as isize
+            - GOOGLE_LOW_QUBIT_SCRATCH as isize;
+    let plusminus_solinas_scale_chunk_one_lane_reuse_scratch = 822usize;
+    let plusminus_solinas_scale_chunk_one_lane_reuse_over_google =
+        plusminus_solinas_scale_chunk_one_lane_reuse_scratch as isize
+            - GOOGLE_LOW_QUBIT_SCRATCH as isize;
     let plusminus_active_quantum_forward_ccx = 138_771usize;
     let plusminus_active_quantum_two_div_step_only = 56_063_484usize;
     let plusminus_active_quantum_gap_to_2700k =
@@ -2312,6 +2331,15 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     println!("METRIC scratch600_plusminus_scaled_slack_scratch_max={plusminus_scaled_slack_scratch_max}");
     println!("METRIC scratch600_plusminus_scaled_solinas_projected_max={plusminus_scaled_solinas_projected_max}");
     println!("METRIC scratch600_plusminus_scaled_solinas_gap_max_to_2700k={plusminus_scaled_solinas_gap_max}");
+    println!("METRIC scratch600_plusminus_solinas_scale_chunk_no_threshold_ccx={plusminus_solinas_scale_chunk_no_threshold_ccx}");
+    println!("METRIC scratch600_plusminus_solinas_scale_chunk_no_threshold_peak_q={plusminus_solinas_scale_chunk_no_threshold_peak}");
+    println!("METRIC scratch600_plusminus_solinas_scale_chunk_exact_ccx={plusminus_solinas_scale_chunk_exact_ccx}");
+    println!("METRIC scratch600_plusminus_solinas_scale_chunk_exact_peak_q={plusminus_solinas_scale_chunk_exact_peak}");
+    println!("METRIC scratch600_plusminus_solinas_scale_chunk_primitive_extra_q={plusminus_solinas_scale_chunk_primitive_extra}");
+    println!("METRIC scratch600_plusminus_solinas_scale_chunk_naive_overlap_scratch={plusminus_solinas_scale_chunk_naive_overlap_scratch}");
+    println!("METRIC scratch600_plusminus_solinas_scale_chunk_naive_over_google_bits={plusminus_solinas_scale_chunk_naive_over_google}");
+    println!("METRIC scratch600_plusminus_solinas_scale_chunk_one_lane_reuse_scratch={plusminus_solinas_scale_chunk_one_lane_reuse_scratch}");
+    println!("METRIC scratch600_plusminus_solinas_scale_chunk_one_lane_reuse_over_google_bits={plusminus_solinas_scale_chunk_one_lane_reuse_over_google}");
     println!("METRIC scratch600_plusminus_active_quantum_forward_ccx={plusminus_active_quantum_forward_ccx}");
     println!("METRIC scratch600_plusminus_active_quantum_two_div_step_only={plusminus_active_quantum_two_div_step_only}");
     println!("METRIC scratch600_plusminus_active_quantum_gap_to_2700k={plusminus_active_quantum_gap_to_2700k}");
@@ -2648,6 +2676,14 @@ fn scratch600_frontier_requires_selector_or_parser_breakthrough() {
     assert!(
         plusminus_active_quantum_gap_to_2700k > 50_000_000,
         "plus-minus active-chain quantum-control blocker changed; revisit physical integration"
+    );
+    assert!(
+        plusminus_scaled_solinas_projected_max < GOOGLE_LOW_QUBIT_TOFFOLI
+            && plusminus_solinas_scale_chunk_no_threshold_ccx == 3_390
+            && plusminus_solinas_scale_chunk_no_threshold_peak > GOOGLE_LOW_QUBIT_SCRATCH
+            && plusminus_solinas_scale_chunk_one_lane_reuse_over_google > 0
+            && plusminus_solinas_scale_chunk_naive_over_google > 400,
+        "plus-minus Solinas scale chunk now fits packed scratch; revisit scale-history route"
     );
     assert!(
         direct_signnorm_rank_over_google > 0 && direct_signnorm_ambiguous_rank_over_google > 0,

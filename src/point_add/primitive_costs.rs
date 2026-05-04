@@ -331,6 +331,76 @@ pub(super) fn direct_solinas_multihalve_chunk_cost_split(k: usize) -> (usize, us
     (current, candidate_without_corr, candidate_exact, threshold_ccx)
 }
 
+pub(super) fn direct_solinas_multihalve_chunk_cost_split_peak(
+    k: usize,
+) -> (usize, usize, usize, usize) {
+    let n = N;
+    let c_low = 977u64;
+    let mask = (1u64 << k) - 1;
+    let c_inv = inv_mod_u64_pow2_for_cost(c_low & mask, k);
+
+    let mut b = B::new();
+    let v = b.alloc_qubits(n);
+    let t = b.alloc_qubits(k);
+    let small_prod_bits = k + 10; // t*977 < 2^(k+10)
+    let small_prod = b.alloc_qubits(small_prod_bits);
+    let start = b.ops.len();
+
+    for i in 0..k {
+        let ci = ((c_inv as u128) << i) as u64 & mask;
+        super::cadd_nbit_const_direct_fast(&mut b, &t, alloy_primitives::U256::from(ci), v[i]);
+    }
+    for i in 0..k {
+        let ci = ((c_low as u128) << i) as u64 & mask;
+        super::csub_nbit_const_direct_fast(
+            &mut b,
+            &v[..k],
+            alloy_primitives::U256::from(ci),
+            t[i],
+        );
+    }
+    for i in 0..k {
+        let ci = alloy_primitives::U256::from(c_low) << i;
+        super::cadd_nbit_const_direct_fast(&mut b, &small_prod, ci, t[i]);
+    }
+    let high = b.alloc_qubits(n);
+    let shift = 32usize - k;
+    for j in 0..k {
+        b.cx(t[j], high[j + shift]);
+    }
+    for j in k..small_prod_bits {
+        b.cx(small_prod[j], high[j - k]);
+    }
+    super::sub_nbit_qq_fast(&mut b, &high, &v);
+    for j in k..small_prod_bits {
+        b.cx(small_prod[j], high[j - k]);
+    }
+    for j in 0..k {
+        b.cx(t[j], high[j + shift]);
+    }
+    b.free_vec(&high);
+    for i in (0..k).rev() {
+        let ci = alloy_primitives::U256::from(c_low) << i;
+        super::csub_nbit_const_direct_fast(&mut b, &small_prod, ci, t[i]);
+    }
+    b.free_vec(&small_prod);
+    super::sub_nbit_qq_fast(&mut b, &v[n - k..], &t);
+    let candidate_without_corr = count_ccx(&b.ops[start..]);
+    let no_threshold_peak = b.peak_qubits as usize;
+
+    let threshold_start = b.ops.len();
+    xor_solinas_multihalve_threshold_flag_for_cost(&mut b, &v, k, t[0]);
+    let candidate_exact = count_ccx(&b.ops[start..]);
+    let exact_peak = b.peak_qubits as usize;
+    let _threshold_ccx = count_ccx(&b.ops[threshold_start..]);
+    (
+        candidate_without_corr,
+        no_threshold_peak,
+        candidate_exact,
+        exact_peak.max(no_threshold_peak),
+    )
+}
+
 fn new_builder_with_reg(n: usize) -> (B, Vec<QubitId>) {
     let mut b = B::new();
     let r = b.alloc_qubits(n);
