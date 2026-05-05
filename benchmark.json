@@ -5,7 +5,7 @@
   "category": "rust",
   "direction": "-",
   "editablePaths": ["src/point_add"],
-  "setupCommand": ["bash", "-lc", "command -v cargo >/dev/null || curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal; . \"$HOME/.cargo/env\" 2>/dev/null || true; cargo fetch"],
+  "setupCommand": ["bash", "-lc", "command -v cargo >/dev/null || curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal; . \"$HOME/.cargo/env\" 2>/dev/null || true; command -v cc >/dev/null || { dnf install -y gcc gcc-c++ make; }; cargo fetch"],
   "benchmarkCommand": ["bash", "-lc", ". \"$HOME/.cargo/env\" 2>/dev/null || true; cargo run --release --bin experiment"],
   "scorePath": "score.json"
 }
