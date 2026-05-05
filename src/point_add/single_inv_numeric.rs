@@ -41106,6 +41106,255 @@ mod tests {
         assert!(degree >= 14);
         assert!(density > 30_000);
     }
+
+    #[test]
+    fn halfgcd_slot_envelope_cf_spike_targets_cover_more_than_naive_rows() {
+        // The public-slot half-GCD row is SOTA-shaped only if the few high
+        // alignment layers can be covered by a public envelope, not by a hidden
+        // sampled oracle.  The earlier toy probe used small denominators plus a
+        // single Fibonacci-center ball and missed exact toy domains.  This
+        // experiment targets the hard cases directly: Euclidean high-alignment
+        // events are continued-fraction quotients with a large "spike" after a
+        // prefix.  Generate rows from those CF spike templates and compare the
+        // resulting envelope against exhaustive toy domains.
+        #[derive(Clone, Debug)]
+        struct ToyEnvelope {
+            prefix: Vec<usize>,
+            decoder: Vec<usize>,
+            tail: Vec<usize>,
+        }
+
+        fn bit_len_u128(x: u128) -> usize {
+            if x == 0 { 0 } else { 128 - x.leading_zeros() as usize }
+        }
+
+        fn update_slot(env: &mut Vec<usize>, slot: usize, bits: usize) {
+            if env.len() <= slot {
+                env.resize(slot + 1, 0);
+            }
+            env[slot] = env[slot].max(bits);
+        }
+
+        fn update_row(env: &mut ToyEnvelope, x: usize, p: usize, depth: usize) {
+            let mut u = p as i128;
+            let mut v = x as i128;
+            let mut b = 0i128;
+            let mut d = 1i128;
+            let mut step = 0usize;
+
+            while step < depth && v != 0 {
+                let q = u / v;
+                let rem = u - q * v;
+                let prefix_top = bit_len_u128(u.unsigned_abs())
+                    .saturating_sub(bit_len_u128(v.unsigned_abs()));
+                env.prefix[step] = env.prefix[step]
+                    .max(usize_bit_len_for_payload_test(prefix_top));
+
+                let nb = d;
+                let nd = b - q * d;
+                let numer = if b == 0 {
+                    nd.unsigned_abs()
+                } else {
+                    nd.unsigned_abs()
+                        .checked_sub(1)
+                        .expect("toy CF-spike decoder numerator underflow")
+                };
+                let denom = nb.unsigned_abs();
+                assert!(denom != 0, "toy CF-spike decoder denominator vanished");
+                assert_eq!(
+                    numer / denom,
+                    q as u128,
+                    "toy CF-spike decoder quotient mismatch"
+                );
+                let decoder_top =
+                    bit_len_u128(numer).saturating_sub(bit_len_u128(denom));
+                env.decoder[step] = env.decoder[step]
+                    .max(usize_bit_len_for_payload_test(decoder_top));
+
+                u = v;
+                v = rem;
+                b = nb;
+                d = nd;
+                step += 1;
+            }
+
+            let mut tail_slot = 0usize;
+            while v != 0 {
+                let q = u / v;
+                let q_bits = bit_len_u128(q.unsigned_abs());
+                update_slot(
+                    &mut env.tail,
+                    tail_slot,
+                    usize_bit_len_for_payload_test(q_bits.saturating_sub(1)),
+                );
+                let rem = u - q * v;
+                u = v;
+                v = rem;
+                tail_slot += 1;
+            }
+            assert_eq!(u, 1, "toy CF-spike tail missed gcd 1");
+        }
+
+        fn merge_rows(xs: &[usize], p: usize, depth: usize) -> ToyEnvelope {
+            let mut env = ToyEnvelope {
+                prefix: vec![0; depth],
+                decoder: vec![0; depth],
+                tail: Vec::new(),
+            };
+            for &x in xs {
+                if x > 0 && x < p {
+                    update_row(&mut env, x, p, depth);
+                }
+            }
+            env
+        }
+
+        fn max_gap(exact: &[usize], target: &[usize]) -> usize {
+            exact
+                .iter()
+                .enumerate()
+                .map(|(i, &bits)| bits.saturating_sub(target.get(i).copied().unwrap_or(0)))
+                .max()
+                .unwrap_or(0)
+        }
+
+        fn cf_num_den(qs: &[usize]) -> (u128, u128) {
+            let mut num = *qs.last().expect("empty CF") as u128;
+            let mut den = 1u128;
+            for &q in qs[..qs.len() - 1].iter().rev() {
+                let next_num = q as u128 * num + den;
+                den = num;
+                num = next_num;
+            }
+            (num, den)
+        }
+
+        fn insert_candidate(target: &mut std::collections::BTreeSet<usize>, p: usize, x: usize) {
+            if x > 0 && x < p {
+                target.insert(x);
+                target.insert(p - x);
+                for delta in 1..=2usize {
+                    if x > delta {
+                        target.insert(x - delta);
+                    }
+                    if x + delta < p {
+                        target.insert(x + delta);
+                    }
+                }
+            }
+        }
+
+        fn cf_spike_rows_for(p: usize, n: usize, depth: usize) -> Vec<usize> {
+            let mut target = std::collections::BTreeSet::<usize>::new();
+            let small_limit = (1usize << (n / 2).max(1)).min(p - 1);
+            for x in 1..=small_limit {
+                insert_candidate(&mut target, p, x);
+            }
+
+            let max_prefix = (2 * n).max(depth + n / 2);
+            for prefix_len in 0..=max_prefix {
+                for bits in 1..=n {
+                    let base = 1usize << bits;
+                    for spike in [base.saturating_sub(1), base, base.saturating_add(1)] {
+                        if spike == 0 {
+                            continue;
+                        }
+                        for suffix_len in 0..=2usize {
+                            let mut qs = vec![1usize; prefix_len];
+                            qs.push(spike);
+                            qs.extend(std::iter::repeat(1usize).take(suffix_len));
+                            let (num, den) = cf_num_den(&qs);
+                            if num == 0 {
+                                continue;
+                            }
+                            let rounded =
+                                ((p as u128) * den + num / 2) / num;
+                            if rounded <= usize::MAX as u128 {
+                                insert_candidate(&mut target, p, rounded as usize);
+                            }
+                        }
+                    }
+                }
+            }
+            target.into_iter().collect::<Vec<_>>()
+        }
+
+        let cases = [
+            (8usize, 251usize),
+            (10, 1021),
+            (12, 4093),
+            (14, 16_381),
+            (16, 65_521),
+        ];
+        let mut covered_cases = 0usize;
+        let mut largest_rows = 0usize;
+        let mut largest_prefix_gap = 0usize;
+        let mut largest_decoder_gap = 0usize;
+        let mut largest_tail_gap = 0usize;
+        let mut n16_rows = 0usize;
+        let mut n16_prefix_gap = 0usize;
+        let mut n16_decoder_gap = 0usize;
+        let mut n16_tail_gap = 0usize;
+
+        for &(n, p) in &cases {
+            let depth = (n / 4).max(1);
+            let exact_xs = (1..p).collect::<Vec<_>>();
+            let exact = merge_rows(&exact_xs, p, depth);
+            let target_xs = cf_spike_rows_for(p, n, depth);
+            let target_env = merge_rows(&target_xs, p, depth);
+            let prefix_gap = max_gap(&exact.prefix, &target_env.prefix);
+            let decoder_gap = max_gap(&exact.decoder, &target_env.decoder);
+            let tail_gap = max_gap(&exact.tail, &target_env.tail);
+            let covered = prefix_gap == 0 && decoder_gap == 0 && tail_gap == 0;
+            covered_cases += covered as usize;
+            largest_rows = largest_rows.max(target_xs.len());
+            largest_prefix_gap = largest_prefix_gap.max(prefix_gap);
+            largest_decoder_gap = largest_decoder_gap.max(decoder_gap);
+            largest_tail_gap = largest_tail_gap.max(tail_gap);
+            if n == 16 {
+                n16_rows = target_xs.len();
+                n16_prefix_gap = prefix_gap;
+                n16_decoder_gap = decoder_gap;
+                n16_tail_gap = tail_gap;
+            }
+            eprintln!(
+                "half-GCD CF-spike envelope n={n}: rows={}, covered={covered}, gap=({prefix_gap},{decoder_gap},{tail_gap}), exact_tail_slots={}",
+                target_xs.len(),
+                exact.tail.len()
+            );
+        }
+
+        println!("METRIC halfgcd_cf_spike_slot_envelope_cases={}", cases.len());
+        println!("METRIC halfgcd_cf_spike_slot_envelope_covered_cases={covered_cases}");
+        println!("METRIC halfgcd_cf_spike_slot_envelope_largest_rows={largest_rows}");
+        println!("METRIC halfgcd_cf_spike_slot_envelope_largest_prefix_gap={largest_prefix_gap}");
+        println!("METRIC halfgcd_cf_spike_slot_envelope_largest_decoder_gap={largest_decoder_gap}");
+        println!("METRIC halfgcd_cf_spike_slot_envelope_largest_tail_gap={largest_tail_gap}");
+        println!("METRIC halfgcd_cf_spike_slot_envelope_n16_rows={n16_rows}");
+        println!("METRIC halfgcd_cf_spike_slot_envelope_n16_prefix_gap={n16_prefix_gap}");
+        println!("METRIC halfgcd_cf_spike_slot_envelope_n16_decoder_gap={n16_decoder_gap}");
+        println!("METRIC halfgcd_cf_spike_slot_envelope_n16_tail_gap={n16_tail_gap}");
+        assert_eq!(
+            covered_cases, 2,
+            "CF-spike row coverage changed; refresh the public slot proof ledger"
+        );
+        assert_eq!(
+            largest_prefix_gap, 0,
+            "CF-spike rows no longer cover all prefix slots on exact toys"
+        );
+        assert_eq!(
+            largest_decoder_gap, 0,
+            "CF-spike rows no longer cover all decoder slots on exact toys"
+        );
+        assert_eq!(
+            largest_tail_gap, 2,
+            "tail slot gap changed; revisit whether the remaining proof/fallback is cheap"
+        );
+        assert_eq!(
+            n16_rows, 1_981,
+            "CF-spike target row count drifted; refresh scaling comparison"
+        );
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
