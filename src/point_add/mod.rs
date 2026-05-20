@@ -107,10 +107,23 @@ struct B {
     pub phase_local_peaks: std::collections::BTreeMap<&'static str, (u32, usize)>,
     // (ops_len_at_transition, new_phase)
     pub phase_transitions: Vec<(usize, &'static str)>,
+    // ── H201 diagnostic: TRACE_PEAK_OWNERS metadata-only owner tracking.
+    // Default-off; populated only when env var TRACE_PEAK_OWNERS is set.
+    // Each live qubit is associated with the phase that was active when it
+    // was allocated (or with the explicit owner stack label if any).
+    // Snapshots are recorded at every alloc that is within
+    // TRACE_PEAK_OWNER_DELTA of the running peak; the final TRACE_PEAK block
+    // filters them against the final peak and prints aggregates.
+    pub owner_enabled: bool,
+    pub owner_stack: Vec<&'static str>,
+    pub owner_at_alloc: std::collections::BTreeMap<u32, &'static str>,
+    // (active_count, phase_at_snapshot, ops_idx, owner_counts_grouped)
+    pub owner_snapshots: Vec<(u32, &'static str, usize, std::collections::BTreeMap<&'static str, u32>)>,
 }
 
 impl B {
     fn new() -> Self {
+        let owner_enabled = std::env::var("TRACE_PEAK_OWNERS").is_ok();
         Self {
             ops: Vec::new(),
             next_qubit: 0,
@@ -125,7 +138,35 @@ impl B {
             peak_log: Vec::new(),
             phase_local_peaks: std::collections::BTreeMap::new(),
             phase_transitions: Vec::new(),
+            owner_enabled,
+            owner_stack: Vec::new(),
+            owner_at_alloc: std::collections::BTreeMap::new(),
+            owner_snapshots: Vec::new(),
         }
+    }
+    /// Diagnostic helper: pushes a label onto the owner stack so subsequent
+    /// allocations are attributed to that label (instead of the current
+    /// phase name). Pops on Drop equivalent via paired call. METADATA-ONLY:
+    /// has no effect when TRACE_PEAK_OWNERS is unset.
+    #[allow(dead_code)]
+    fn push_owner(&mut self, label: &'static str) {
+        if self.owner_enabled {
+            self.owner_stack.push(label);
+        }
+    }
+    #[allow(dead_code)]
+    fn pop_owner(&mut self) {
+        if self.owner_enabled {
+            self.owner_stack.pop();
+        }
+    }
+    /// Scoped owner label: runs `f` with `label` active on the owner stack.
+    /// METADATA-ONLY; no effect on emitted ops or qubit lifetimes.
+    #[allow(dead_code)]
+    fn with_owner<F: FnOnce(&mut B)>(&mut self, label: &'static str, f: F) {
+        self.push_owner(label);
+        f(self);
+        self.pop_owner();
     }
     fn set_phase(&mut self, p: &'static str) {
         self.phase = p;
@@ -162,13 +203,38 @@ impl B {
                 }
             }
         }
-        if let Some(q) = self.free_qubits.pop() {
+        let q = if let Some(q) = self.free_qubits.pop() {
             QubitId(q)
         } else {
             let q = self.next_qubit;
             self.next_qubit += 1;
             QubitId(q)
+        };
+        if self.owner_enabled {
+            // Record this qubit's owner: top of owner_stack if present,
+            // otherwise the current phase. Pure metadata.
+            let owner: &'static str = self
+                .owner_stack
+                .last()
+                .copied()
+                .unwrap_or(self.phase);
+            self.owner_at_alloc.insert(q.0, owner);
+            // Take a near-peak snapshot at this allocation. The final
+            // peak is unknown yet; we filter at print time using
+            // TRACE_PEAK_OWNER_DELTA. We over-capture cheaply here:
+            // snapshot every alloc within 64 of the running peak so we
+            // never miss the final-peak band.
+            if self.active_qubits + 64 >= self.peak_qubits {
+                let mut counts: std::collections::BTreeMap<&'static str, u32> =
+                    std::collections::BTreeMap::new();
+                for (_qid, owner) in self.owner_at_alloc.iter() {
+                    *counts.entry(*owner).or_insert(0) += 1;
+                }
+                self.owner_snapshots
+                    .push((self.active_qubits, self.phase, self.ops.len(), counts));
+            }
         }
+        q
     }
     fn alloc_qubits(&mut self, n: usize) -> Vec<QubitId> {
         (0..n).map(|_| self.alloc_qubit()).collect()
@@ -186,6 +252,9 @@ impl B {
         self.free_qubits.push(q.0);
         if self.active_qubits > 0 {
             self.active_qubits -= 1;
+        }
+        if self.owner_enabled {
+            self.owner_at_alloc.remove(&q.0);
         }
     }
     fn free_vec(&mut self, qs: &[QubitId]) {
@@ -10289,6 +10358,100 @@ pub fn build() -> Vec<Op> {
         }
         for (ph, (a, op)) in uniq.iter() {
             eprintln!("DEBUG near_peak active={} phase='{}' ops_idx={}", a, ph, op);
+        }
+    }
+
+    // ── H201 diagnostic: TRACE_PEAK_OWNERS final report ────────────────
+    // Enabled only when both TRACE_PEAK and TRACE_PEAK_OWNERS are set
+    // (TRACE_PEAK is the umbrella switch; TRACE_PEAK_OWNERS enables the
+    // owner_at_alloc bookkeeping in alloc/free). Metadata-only.
+    if std::env::var("TRACE_PEAK").is_ok() && b.owner_enabled {
+        let pk = b.peak_qubits;
+        let delta: u32 = std::env::var("TRACE_PEAK_OWNER_DELTA")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(5);
+        // For each phase, keep the snapshot with the highest active count
+        // (representative near-peak snapshot for that phase).
+        let mut best: std::collections::BTreeMap<
+            &'static str,
+            (u32, usize, std::collections::BTreeMap<&'static str, u32>),
+        > = std::collections::BTreeMap::new();
+        for (a, ph, op, counts) in b.owner_snapshots.iter() {
+            if *a + delta >= pk {
+                let entry = best
+                    .entry(*ph)
+                    .or_insert((*a, *op, counts.clone()));
+                if *a > entry.0 {
+                    *entry = (*a, *op, counts.clone());
+                }
+            }
+        }
+        eprintln!(
+            "PEAK_OWNER_SELECTED phases={} delta={} peak={}",
+            best.len(),
+            delta,
+            pk
+        );
+        // Emit PEAK_OWNER_PHASE + per-label counts + residual (=0).
+        // Also compute intersections: labels present in every selected
+        // phase, with their minimum count across those phases.
+        let mut intersection: Option<std::collections::BTreeMap<&'static str, u32>> = None;
+        for (ph, (a, op, counts)) in best.iter() {
+            eprintln!(
+                "PEAK_OWNER_PHASE phase='{}' active={} op_idx={}",
+                ph, a, op
+            );
+            let mut sum: u32 = 0;
+            // Sort labels by count desc for readability.
+            let mut sorted: Vec<(&&'static str, &u32)> = counts.iter().collect();
+            sorted.sort_by(|x, y| y.1.cmp(x.1).then(x.0.cmp(y.0)));
+            for (label, count) in sorted {
+                eprintln!(
+                    "PEAK_OWNER_LABEL phase='{}' label='{}' count={}",
+                    ph, label, count
+                );
+                sum += *count;
+            }
+            // Residual is by construction 0 because every live qubit is
+            // recorded in owner_at_alloc. Surface it explicitly so the
+            // diagnostic contract is verifiable.
+            let residual: i64 = (*a as i64) - (sum as i64);
+            eprintln!(
+                "PEAK_OWNER_RESIDUAL phase='{}' active={} labeled_sum={} residual={}",
+                ph, a, sum, residual
+            );
+            if residual != 0 {
+                eprintln!(
+                    "PEAK_OWNER_MISMATCH phase='{}' active={} labeled_sum={} (expected residual=0)",
+                    ph, a, sum
+                );
+            }
+            // Update running intersection.
+            intersection = Some(match intersection.take() {
+                None => counts.clone(),
+                Some(prev) => {
+                    let mut next: std::collections::BTreeMap<&'static str, u32> =
+                        std::collections::BTreeMap::new();
+                    for (k, v) in prev.iter() {
+                        if let Some(c2) = counts.get(k) {
+                            next.insert(*k, (*v).min(*c2));
+                        }
+                    }
+                    next
+                }
+            });
+        }
+        if let Some(inter) = intersection {
+            let mut sorted: Vec<(&&'static str, &u32)> = inter.iter().collect();
+            sorted.sort_by(|x, y| y.1.cmp(x.1).then(x.0.cmp(y.0)));
+            let phases = best.len();
+            for (label, min_count) in sorted {
+                eprintln!(
+                    "PEAK_OWNER_INTERSECTION label='{}' min={} phases={}",
+                    label, min_count, phases
+                );
+            }
         }
     }
 
