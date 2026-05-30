@@ -430,6 +430,16 @@ fn direct_const_halve_enabled() -> bool {
     env_flag_enabled("KAL_DIRECT_CONST_HALVE", !pair1_mul1_karatsuba_enabled(N))
 }
 
+fn direct_const_modred_enabled() -> bool {
+    // Experiment 001: modular reduction repeatedly adds/subtracts the sparse
+    // Solinas constant c=2^32+977.  The old fast path materialized c (or
+    // ctrl?c:0) into a field-width addend register and then allocated a second
+    // carry bank inside Cuccaro.  The direct constant path keeps only the carry
+    // bank live, so the field-width scratch register is allocated never rather
+    // than early and long-lived across reduction sub-stages.
+    env_flag_enabled("KAL_DIRECT_CONST_MODRED", true)
+}
+
 fn pair1_mul2_karatsuba_enabled(n: usize) -> bool {
     let min_n = std::env::var("POINT_ADD_KARATSUBA_MIN_N")
         .ok()
@@ -784,6 +794,8 @@ fn mod_sub_qq_fast(b: &mut B, acc: &[QubitId], a: &[QubitId], p: U256) {
         );
         b.free(q_clean2[0]);
         b.free(q_clean2[1]);
+    } else if direct_const_modred_enabled() {
+        csub_nbit_const_direct_fast(b, &acc_ext[..n], c, flag);
     } else {
         csub_nbit_const_fast(b, &acc_ext[..n], c, flag);
     }
@@ -1198,6 +1210,17 @@ fn cadd_nbit_const_direct_fast(b: &mut B, acc: &[QubitId], c: U256, ctrl: QubitI
     }
 
     b.free_vec(&carries);
+}
+
+fn add_nbit_const_direct_fast(b: &mut B, acc: &[QubitId], c: U256) {
+    // Unconditional direct constant add.  Use one short-lived |1> control
+    // instead of materializing an n-bit constant register; the direct adder's
+    // carry bank is uncomputed and freed internally.
+    let ctrl = b.alloc_qubit();
+    b.x(ctrl);
+    cadd_nbit_const_direct_fast(b, acc, c, ctrl);
+    b.x(ctrl);
+    b.free(ctrl);
 }
 
 fn add_nbit_const_fast(b: &mut B, acc: &[QubitId], c: U256) {
@@ -1785,6 +1808,8 @@ fn mod_add_qq_fast(b: &mut B, acc: &[QubitId], a: &[QubitId], p: U256) {
         );
         b.free(q_clean2[0]);
         b.free(q_clean2[1]);
+    } else if direct_const_modred_enabled() {
+        add_nbit_const_direct_fast(b, &acc_ext, c);
     } else {
         let n1 = acc_ext.len();
         let ca = load_const(b, n1, c);
@@ -1809,6 +1834,8 @@ fn mod_add_qq_fast(b: &mut B, acc: &[QubitId], a: &[QubitId], p: U256) {
         );
         b.free(q_clean2[0]);
         b.free(q_clean2[1]);
+    } else if direct_const_modred_enabled() {
+        csub_nbit_const_direct_fast(b, &acc_ext, c, flag);
     } else {
         let n1 = acc_ext.len();
         let ca = b.alloc_qubits(n1);
@@ -1868,6 +1895,8 @@ fn mod_add_qq_fast_from_zero(b: &mut B, acc: &[QubitId], a: &[QubitId], p: U256)
         );
         b.free(q_clean2[0]);
         b.free(q_clean2[1]);
+    } else if direct_const_modred_enabled() {
+        add_nbit_const_direct_fast(b, &acc_ext, c);
     } else {
         let n1 = acc_ext.len();
         let ca = load_const(b, n1, c);
@@ -1891,6 +1920,8 @@ fn mod_add_qq_fast_from_zero(b: &mut B, acc: &[QubitId], a: &[QubitId], p: U256)
         );
         b.free(q_clean2[0]);
         b.free(q_clean2[1]);
+    } else if direct_const_modred_enabled() {
+        csub_nbit_const_direct_fast(b, &acc_ext, c, flag);
     } else {
         let n1 = acc_ext.len();
         let ca = b.alloc_qubits(n1);
