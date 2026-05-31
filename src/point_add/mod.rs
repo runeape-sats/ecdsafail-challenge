@@ -2801,6 +2801,8 @@ fn mod_mul_add_into_acc_karatsuba_lowq_with_tmp_ext(
     p: U256,
     tmp_ext: &[QubitId],
 ) {
+    /// Low-peak Karatsuba add-multiply: keep the half-sum/merge adders lowq and
+    /// use register-free Solinas correction for all positive reduction folds.
     let n = acc.len();
     debug_assert_eq!(n, 256);
     debug_assert_eq!(tmp_ext.len(), 2 * n);
@@ -2810,12 +2812,16 @@ fn mod_mul_add_into_acc_karatsuba_lowq_with_tmp_ext(
 
     let lo: Vec<QubitId> = tmp_ext[0..n].to_vec();
     let hi: Vec<QubitId> = tmp_ext[n..2 * n].to_vec();
-    mod_add_qq_fast(b, acc, &lo, p);
-    mod_add_qq_fast(b, acc, &hi, p);
+    // This lowq Karatsuba path is selected exactly at live-state-heavy sites.
+    // Avoid materializing full-width Solinas constants during the positive
+    // folds; the direct sparse-constant correction is arithmetically identical
+    // to mod_add_qq_fast but saves a field-sized scratch register at local peak.
+    mod_add_qq_fast_lowscratch(b, acc, &lo, p);
+    mod_add_qq_fast_lowscratch(b, acc, &hi, p);
     for _ in 0..4 {
         mod_double_inplace_fast(b, &hi, p);
     }
-    mod_add_qq_fast(b, acc, &hi, p);
+    mod_add_qq_fast_lowscratch(b, acc, &hi, p);
     for _ in 0..2 {
         mod_double_inplace_fast(b, &hi, p);
     }
@@ -2823,7 +2829,7 @@ fn mod_mul_add_into_acc_karatsuba_lowq_with_tmp_ext(
     for _ in 0..4 {
         mod_double_inplace_fast(b, &hi, p);
     }
-    mod_add_qq_fast(b, acc, &hi, p);
+    mod_add_qq_fast_lowscratch(b, acc, &hi, p);
     let (spill, flag_inv, ovf) = mod_shift_left_by_k(b, &hi, p, 22);
     mod_add_qq(b, acc, &hi, p);
     mod_shift_right_by_k(b, &hi, p, 22, spill, flag_inv, ovf);
@@ -3395,17 +3401,23 @@ fn squaring_add_to_acc_schoolbook(b: &mut B, acc: &[QubitId], x: &[QubitId], p: 
 }
 
 fn mod_add_solinas_ext_product(b: &mut B, acc: &[QubitId], tmp_ext: &[QubitId], p: U256) {
+    /// Fold a 512-bit product into a freshly-zero field accumulator using the
+    /// secp256k1 Solinas relation, avoiding loaded constant scratch registers.
     let n = acc.len();
     debug_assert_eq!(n, 256);
     debug_assert_eq!(tmp_ext.len(), 2 * n);
     let lo: Vec<QubitId> = tmp_ext[0..n].to_vec();
     let hi: Vec<QubitId> = tmp_ext[n..2 * n].to_vec();
-    mod_add_qq_fast(b, acc, &lo, p);
-    mod_add_qq_fast(b, acc, &hi, p);
+    // In the main affine-combined path this helper is used immediately after
+    // allocating `acc` as |0>.  Use the from-zero variant for the low limb,
+    // saving the initial ripple add, and use low-scratch positive Solinas
+    // folds to reduce the peak qubit footprint.
+    mod_add_qq_fast_from_zero_lowscratch(b, acc, &lo, p);
+    mod_add_qq_fast_lowscratch(b, acc, &hi, p);
     for _ in 0..4 {
         mod_double_inplace_fast(b, &hi, p);
     }
-    mod_add_qq_fast(b, acc, &hi, p);
+    mod_add_qq_fast_lowscratch(b, acc, &hi, p);
     for _ in 0..2 {
         mod_double_inplace_fast(b, &hi, p);
     }
@@ -3413,7 +3425,7 @@ fn mod_add_solinas_ext_product(b: &mut B, acc: &[QubitId], tmp_ext: &[QubitId], 
     for _ in 0..4 {
         mod_double_inplace_fast(b, &hi, p);
     }
-    mod_add_qq_fast(b, acc, &hi, p);
+    mod_add_qq_fast_lowscratch(b, acc, &hi, p);
     let (spill, flag_inv, ovf) = mod_shift_left_by_k(b, &hi, p, 22);
     mod_add_qq(b, acc, &hi, p);
     mod_shift_right_by_k(b, &hi, p, 22, spill, flag_inv, ovf);
