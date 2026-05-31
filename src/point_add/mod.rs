@@ -313,12 +313,38 @@ impl B {
         op.c_condition = cond;
         self.ops.push(op);
     }
+    fn z_if(&mut self, q: QubitId, cond: BitId) {
+        let mut op = Op::empty();
+        op.kind = OperationType::Z;
+        op.q_target = q;
+        op.c_condition = cond;
+        self.ops.push(op);
+    }
+    fn cx_if(&mut self, ctrl: QubitId, tgt: QubitId, cond: BitId) {
+        let mut op = Op::empty();
+        op.kind = OperationType::CX;
+        op.q_control1 = ctrl;
+        op.q_target = tgt;
+        op.c_condition = cond;
+        self.ops.push(op);
+    }
     // ── Measurement / phase / classical bit ops ──
     fn hmr(&mut self, q: QubitId, c: BitId) {
         let mut op = Op::empty();
         op.kind = OperationType::Hmr;
         op.q_target = q;
         op.c_target = c;
+        self.ops.push(op);
+    }
+    fn push_condition(&mut self, cond: BitId) {
+        let mut op = Op::empty();
+        op.kind = OperationType::PushCondition;
+        op.c_condition = cond;
+        self.ops.push(op);
+    }
+    fn pop_condition(&mut self) {
+        let mut op = Op::empty();
+        op.kind = OperationType::PopCondition;
         self.ops.push(op);
     }
     // ── Classically-conditioned variants for all remaining gates ──
@@ -330,6 +356,12 @@ impl B {
         op.c_condition = cond;
         self.ops.push(op);
     }
+}
+
+fn with_bit_condition<F: FnOnce(&mut B)>(b: &mut B, cond: BitId, f: F) {
+    b.push_condition(cond);
+    f(b);
+    b.pop_condition();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -448,6 +480,10 @@ fn pair2_mul_karatsuba_enabled(n: usize) -> bool {
     point_add_karatsuba_enabled()
         && n >= min_n
         && env_flag_enabled("KAL_PAIR2_MUL_KARATSUBA", true)
+}
+
+fn sol_sub6_lowq_enabled() -> bool {
+    env_flag_enabled("POINT_ADD_SOL_SUB6_LOWQ", false)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -671,6 +707,151 @@ fn unload_bits(b: &mut B, qs: &[QubitId], bits: &[BitId]) {
     b.free_vec(qs);
 }
 
+fn offset_bits_enabled() -> bool {
+    env_flag_enabled("POINT_ADD_BITREG_OFFSETS", true)
+}
+
+fn offset_bits_add_enabled() -> bool {
+    offset_bits_enabled() || env_flag_enabled("POINT_ADD_BITREG_OFFSET_ADD", false)
+}
+
+fn bit_src(bits: &[BitId], i: usize) -> Option<BitId> {
+    bits.get(i).copied()
+}
+
+fn phase_majority_qbitq(
+    b: &mut B,
+    a: QubitId,
+    k: Option<BitId>,
+    carry: Option<QubitId>,
+    m: BitId,
+) {
+    if let Some(c) = carry {
+        b.cz_if(a, c, m);
+    }
+    if let Some(k) = k {
+        with_bit_condition(b, k, |b| {
+            b.z_if(a, m);
+            if let Some(c) = carry {
+                b.z_if(c, m);
+            }
+        });
+    }
+}
+
+/// `acc += bits mod 2^n`, where `bits` is a runtime classical bit register.
+/// Carry qubits are measured out with the same Gidney-style phase correction
+/// as the qubit/qubit fast adder, but the offset payload is never loaded into
+/// qubits.
+fn add_nbit_qb_fast(b: &mut B, bits: &[BitId], acc: &[QubitId]) {
+    let n = acc.len();
+    assert!(bits.len() <= n);
+    if n == 0 {
+        return;
+    }
+    if n == 1 {
+        if let Some(k) = bit_src(bits, 0) {
+            b.x_if(acc[0], k);
+        }
+        return;
+    }
+
+    let carries = b.alloc_qubits(n - 1);
+
+    // Forward carry sweep: carry_{i+1} = majority(acc_i, bit_i, carry_i).
+    for i in 0..n - 1 {
+        let target = carries[i];
+        let carry_in = if i == 0 { None } else { Some(carries[i - 1]) };
+        if let Some(c) = carry_in {
+            b.ccx(acc[i], c, target);
+        }
+        if let Some(k) = bit_src(bits, i) {
+            b.cx_if(acc[i], target, k);
+            if let Some(c) = carry_in {
+                b.cx_if(c, target, k);
+            }
+        }
+    }
+
+    // Sum bits.
+    for i in 0..n {
+        if let Some(k) = bit_src(bits, i) {
+            b.x_if(acc[i], k);
+        }
+        if i > 0 {
+            b.cx(carries[i - 1], acc[i]);
+        }
+    }
+
+    // Measurement-uncompute carries. For addition, after the sum write:
+    // carry_{i+1} = majority(!acc_i_final, bit_i, carry_i).
+    for i in (0..n - 1).rev() {
+        let m = b.alloc_bit();
+        b.hmr(carries[i], m);
+        let carry_in = if i == 0 { None } else { Some(carries[i - 1]) };
+        if let Some(c) = carry_in {
+            b.x(acc[i]);
+            b.cz_if(acc[i], c, m);
+            b.x(acc[i]);
+        }
+        if let Some(k) = bit_src(bits, i) {
+            with_bit_condition(b, k, |b| {
+                b.x(acc[i]);
+                b.z_if(acc[i], m);
+                b.x(acc[i]);
+                if let Some(c) = carry_in {
+                    b.z_if(c, m);
+                }
+            });
+        }
+    }
+
+    b.free_vec(&carries);
+}
+
+/// flag ^= (u < bits), preserving `u` and without materializing `bits`.
+fn cmp_lt_bits_into_fast(b: &mut B, u: &[QubitId], bits: &[BitId], flag: QubitId) {
+    let n = u.len();
+    assert!(bits.len() <= n);
+    if n == 0 {
+        return;
+    }
+
+    let carries = b.alloc_qubits(n);
+    for i in 0..n {
+        b.x(u[i]);
+    }
+
+    // Carry-out of (~u + bits) is 1 iff u < bits.
+    for i in 0..n {
+        let target = carries[i];
+        let carry_in = if i == 0 { None } else { Some(carries[i - 1]) };
+        if let Some(c) = carry_in {
+            b.ccx(u[i], c, target);
+        }
+        if let Some(k) = bit_src(bits, i) {
+            b.cx_if(u[i], target, k);
+            if let Some(c) = carry_in {
+                b.cx_if(c, target, k);
+            }
+        }
+    }
+
+    b.cx(carries[n - 1], flag);
+
+    for i in (0..n).rev() {
+        let m = b.alloc_bit();
+        b.hmr(carries[i], m);
+        let carry_in = if i == 0 { None } else { Some(carries[i - 1]) };
+        phase_majority_qbitq(b, u[i], bit_src(bits, i), carry_in, m);
+    }
+
+    for i in 0..n {
+        b.x(u[i]);
+    }
+    b.free_vec(&carries);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 //  Extended registers and modular reduction
 // ═══════════════════════════════════════════════════════════════════════════
@@ -822,6 +1003,10 @@ fn mod_add_qc(b: &mut B, acc: &[QubitId], c: U256, p: U256) {
 
 fn mod_add_qb(b: &mut B, acc: &[QubitId], bits: &[BitId], p: U256) {
     // acc := (acc + bits) mod p. `bits` is a classical bit register.
+    if offset_bits_add_enabled() {
+        mod_add_qb_direct(b, acc, bits, p);
+        return;
+    }
     let a = load_bits(b, bits);
     mod_add_qq_fast(b, acc, &a, p);
     unload_bits(b, &a, bits);
@@ -851,6 +1036,30 @@ fn mod_sub_qb(b: &mut B, acc: &[QubitId], bits: &[BitId], p: U256) {
     let a = load_bits(b, bits);
     mod_sub_qq_fast(b, acc, &a, p);
     unload_bits(b, &a, bits);
+}
+
+fn mod_add_qb_direct(b: &mut B, acc: &[QubitId], bits: &[BitId], p: U256) {
+    let n = acc.len();
+    assert_eq!(bits.len(), n);
+    debug_assert_eq!(n, 256);
+
+    let (acc_ext, acc_ovf) = ext_reg(b, acc);
+
+    add_nbit_qb_fast(b, bits, &acc_ext);
+    let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1));
+    add_nbit_const_fast(b, &acc_ext, c);
+
+    let flag = b.alloc_qubit();
+    b.cx(acc_ovf, flag);
+    b.x(flag);
+    csub_nbit_const_fast(b, &acc_ext, c, flag);
+    b.x(flag);
+    b.cx(flag, acc_ovf);
+    cmp_lt_bits_into_fast(b, &acc_ext[..n], bits, flag);
+    b.free(flag);
+
+    unext_reg(b, acc_ovf);
+    let _ = acc_ext;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1676,7 +1885,7 @@ fn mod_halve_inplace_fast_with_dirty(
     b.cx(v[0], ovf);
     // If caller provided enough dirty qubits AND c fits in u64 (it does
     // for secp256k1: c = 2^32 + 977), use the venting variant.
-    let use_venting = std::env::var("KAL_VENT_HALVE").ok().as_deref() == Some("1")
+    let use_venting = env_flag_enabled("KAL_VENT_HALVE", false)
         && dirty_src.map_or(false, |d| d.len() >= n - 2);
     if use_venting {
         // c as u64 (it fits: c = 0x1000003D1).
@@ -3010,7 +3219,11 @@ fn mod_mul_write_into_zero_acc_karatsuba_with_tmp_ext(
         mod_double_inplace_fast(b, &hi, p);
     }
     b.set_phase("sol_sub6");
-    mod_sub_qq_fast(b, acc, &hi, p);
+    if sol_sub6_lowq_enabled() {
+        mod_sub_qq(b, acc, &hi, p);
+    } else {
+        mod_sub_qq_fast(b, acc, &hi, p);
+    }
     for _ in 0..4 {
         mod_double_inplace_fast(b, &hi, p);
     }
@@ -10631,4 +10844,77 @@ pub fn build() -> Vec<Op> {
     }
 
     b.ops.clone()
+}
+
+#[cfg(test)]
+mod bitreg_offset_tests {
+    use super::*;
+    use crate::sim::Simulator;
+    use sha3::digest::{ExtendableOutput, Update};
+
+    fn xof(tag: &[u8]) -> sha3::Shake256Reader {
+        let mut h = Shake256::default();
+        h.update(tag);
+        h.finalize_xof()
+    }
+
+    fn run_cases<F, G>(n: usize, build: F, expected: G)
+    where
+        F: Fn(&mut B, &[BitId], &[QubitId], QubitId),
+        G: Fn(u64, u64) -> (u64, bool),
+    {
+        let mut b = B::new();
+        let acc = b.alloc_qubits(n);
+        let bits = b.alloc_bits(n);
+        let flag = b.alloc_qubit();
+        build(&mut b, &bits, &acc, flag);
+
+        let mut x = xof(b"bitreg-offset-test");
+        let mut sim = Simulator::new(b.next_qubit as usize, b.next_bit as usize, &mut x);
+        for a in 0..(1u64 << n) {
+            for k in 0..(1u64 << n) {
+                sim.clear_for_shot();
+                for i in 0..n {
+                    if (a >> i) & 1 != 0 {
+                        *sim.qubit_mut(acc[i]) = 1;
+                    }
+                    if (k >> i) & 1 != 0 {
+                        *sim.bit_mut(bits[i]) = 1;
+                    }
+                }
+                sim.apply_iter(b.ops.iter());
+                let (want_acc, want_flag) = expected(a, k);
+                let mut got = 0u64;
+                for i in 0..n {
+                    got |= (sim.qubit(acc[i]) & 1) << i;
+                }
+                assert_eq!((got, sim.qubit(flag) != 0), (want_acc, want_flag), "a={a} k={k}");
+                assert_eq!(sim.phase & 1, 0, "phase a={a} k={k}");
+                for q in 0..b.next_qubit {
+                    let is_live = acc.iter().any(|v| v.0 == q) || flag.0 == q;
+                    if !is_live {
+                        assert_eq!(sim.qubit(QubitId(q)) & 1, 0, "garbage q{q} a={a} k={k}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn add_nbit_qb_fast_is_phase_clean() {
+        run_cases(
+            4,
+            |b, bits, acc, _flag| add_nbit_qb_fast(b, bits, acc),
+            |a, k| ((a + k) & 15, false),
+        );
+    }
+
+    #[test]
+    fn cmp_lt_bits_into_fast_is_phase_clean() {
+        run_cases(
+            4,
+            |b, bits, acc, flag| cmp_lt_bits_into_fast(b, acc, bits, flag),
+            |a, k| (a, a < k),
+        );
+    }
 }
