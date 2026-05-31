@@ -4211,8 +4211,20 @@ fn bulk_prefix_caps(pair: KalPair) -> BulkPrefixCaps {
         && env_usize("KAL_PAIR1_BULK3_FWD_ITERS").is_none()
         && env_usize("KAL_PAIR1_BULK3_BK_ITERS").is_none()
     {
-        forward = 394;
-        backward = 394;
+        forward = 398;
+        backward = 398;
+    }
+
+    if matches!(pair, KalPair::Pair2)
+        && env_usize("KAL_BULK3_ITERS").is_none()
+        && env_usize("KAL_BULK3_FWD_ITERS").is_none()
+        && env_usize("KAL_BULK3_BK_ITERS").is_none()
+        && env_usize("KAL_PAIR2_BULK3_ITERS").is_none()
+        && env_usize("KAL_PAIR2_BULK3_FWD_ITERS").is_none()
+        && env_usize("KAL_PAIR2_BULK3_BK_ITERS").is_none()
+    {
+        forward = 396;
+        backward = 396;
     }
 
     BulkPrefixCaps { forward, backward }
