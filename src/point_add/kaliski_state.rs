@@ -81,14 +81,15 @@ pub(crate) fn kal_wtrunc_k0() -> usize {
 }
 
 pub(crate) fn kal_wtrunc_margin() -> usize {
-    // Banked: margin=1 — on the a97b4e9 (K0=26) base PAIRED with R_SMALL=325.
-    // margin=1 FAILs on the base R=326 island (2 mismatch); R_SMALL=325 re-rolls
-    // the Fiat-Shamir inputs onto an island where margin=1 is CLEAN (9024-shot
-    // 0/0/0, peak-neutral 2309). margin=0 still rejects across R∈{324..328} (a
-    // persistent 1-3 straggler floor — the envelope needs ≥1 bit slack). margin=1
-    // + R=325 = 2,810,401 avg-exec Toffoli × 2309 = 6,489,215,909 (validated clean).
-    // KAL_WTRUNC_MARGIN env override remains available.
-    env_usize("KAL_WTRUNC_MARGIN").unwrap_or(1)
+    // Banked: margin=0 — on the a97b4e9 (K0=26) base, PAIRED with R_SMALL=325 AND
+    // carry-tail W=24. margin=0 (no slack above the fitted W-TRUNC envelope) FAILs
+    // on the R=325/W=36 island (1-3 stragglers across R∈{324..328}); but lowering
+    // the carry-tail W re-rolls the inputs, and on the W=24 island margin=0 is CLEAN
+    // (9024-shot 0/0/0, peak 2309). So all three stack: R=325 (re-roll for the GCD
+    // truncation), margin=0 (deepest GCD-width truncation), W=24 (deepest carry-tail
+    // + the re-roll that makes margin=0 clean). margin=0+R=325+W=24 = 2,798,569 ×
+    // 2309 = 6,461,895,821 (validated clean). KAL_WTRUNC_MARGIN env override remains.
+    env_usize("KAL_WTRUNC_MARGIN").unwrap_or(0)
 }
 
 /// Empirical-bound truncation width for a CCX-bearing Kaliski width loop at
@@ -182,8 +183,14 @@ pub(crate) fn kal_carrytail_w() -> usize {
     // W∈{49,36}; W=36 is the deepest clean island found (2,818,561 avg-exec T ×
     // 2309 peak = 6,508,057,349, 0/0 over 9024). W∈{45,42,40,38,35,34,33,32,31,30,
     // 29,28,27,26,25,24} all FAIL the island lottery on this base. margin=3 floor.
+    // T-squeeze: dropped W=36->24 on the NEW (margin=0, R_SMALL=325) island. The
+    // W-TRUNC margin=0 + R=325 re-roll reopened the carry-tail W door: a margin=0
+    // W-sweep found CLEAN islands at W∈{37,35,28,24}; W=24 is the deepest (borrow
+    // chain to bit 33+24=57, still 5 bits above the 19-bit MC max → arithmetically
+    // exact). W∈{20,21,22,23,25,26,27,29..} reject the lottery on this island.
+    // margin=0 + R=325 + W=24 = 2,798,569 × 2309 = 6,461,895,821 (validated clean).
     // KAL_CARRYTAIL_W env override remains.
-    env_usize("KAL_CARRYTAIL_W").unwrap_or(36)
+    env_usize("KAL_CARRYTAIL_W").unwrap_or(24)
 }
 
 pub(crate) fn kal_carrytail_k0() -> usize {
