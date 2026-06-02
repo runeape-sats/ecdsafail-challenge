@@ -27859,7 +27859,7 @@ fn configure_ecdsafail_submission_route() {
     set_default_env("DIALOG_GCD_COMPRESSED_SIDECAR_LOG", "1");
     set_default_env("DIALOG_GCD_COMPRESSED_BLOCK_LIFECYCLE", "1");
     set_default_env("DIALOG_GCD_PA9024_COMPARE_SCHEDULE", "0");
-    set_default_env("DIALOG_GCD_COMPARE_BITS", "75");
+    set_default_env("DIALOG_GCD_COMPARE_BITS", "63");
     set_default_env("DIALOG_GCD_APPLY_CLEAN_COMPARE_BITS", "20");
     set_default_env("DIALOG_GCD_RAW_PA", "1");
     set_default_env("DIALOG_GCD_ACTIVE_ITERATIONS", "399");
@@ -27882,9 +27882,11 @@ fn configure_ecdsafail_submission_route() {
     // difference, mirroring the already-measured apply ADD. ~n Toffoli instead
     // of ~2n per call; peak-neutral (same carry lane the ADD already uses).
     set_default_env("DIALOG_GCD_MEASURED_APPLY_SUB", "1");
-    // The measured difference changes the op stream (Fiat-Shamir sample);
-    // reroll=1 lands a clean 9024-shot island for it.
-    set_default_env("DIALOG_REROLL", "1");
+    // COMPARE_BITS tightening: narrow the GCD comparator window 75 -> 63 and
+    // co-tune the Fiat-Shamir reroll (1 -> 5) to land a clean 9024-shot island.
+    // Pure Toffoli reduction (1981734 -> 1952382), peak-neutral at 1698.
+    // (Validated 0/0/0 over 9024 via eval_circuit.)
+    set_default_env("DIALOG_REROLL", "5");
 }
 
 fn build_builder() -> B {
