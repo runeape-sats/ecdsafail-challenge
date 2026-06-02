@@ -23733,6 +23733,45 @@ fn dialog_gcd_ccx_cmp_gt_truncated_into_width(
     ccx_cmp_lt_into_fast(b, &v[start..], &u[start..], ctrl, target);
 }
 
+fn dialog_gcd_branch_bits_host_comparator_enabled() -> bool {
+    std::env::var("DIALOG_GCD_BRANCH_BITS_HOST_COMPARATOR")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
+/// Truncated controlled branch-bit comparator that hosts its borrow `c_in` +
+/// `carries` transient on a borrowed clean slice (the idle future-log region)
+/// when one of sufficient length is supplied, freeing the peak qubit the fresh
+/// allocation would otherwise consume at the branch_bits instant. Falls back to
+/// the self-allocating comparator when no slice (or a too-short one) is given, so
+/// behaviour is identical to `dialog_gcd_ccx_cmp_gt_truncated_into_width` in that
+/// case. Value-exact either way.
+fn dialog_gcd_ccx_cmp_gt_truncated_into_width_hosted(
+    b: &mut B,
+    u: &[QubitId],
+    v: &[QubitId],
+    ctrl: QubitId,
+    target: QubitId,
+    compare_bits: usize,
+    borrowed: Option<&[QubitId]>,
+) {
+    assert_eq!(u.len(), v.len());
+    assert!(!u.is_empty());
+    let compare_bits = compare_bits.min(u.len()).max(1);
+    let start = u.len() - compare_bits;
+    let cmp_u = &v[start..];
+    let cmp_v = &u[start..];
+    let n = cmp_u.len();
+    // Need c_in (1) + carries (n) = n+1 borrowed lanes.
+    if let Some(slice) = borrowed.filter(|s| s.len() >= n + 1) {
+        let (c_in, carries) = slice.split_first().expect("slice len >= n+1 > 0");
+        ccx_cmp_lt_into_fast_borrowed_carries(b, cmp_u, cmp_v, ctrl, target, *c_in, &carries[..n]);
+    } else {
+        ccx_cmp_lt_into_fast(b, cmp_u, cmp_v, ctrl, target);
+    }
+}
+
 fn dialog_gcd_cmp_gt_truncated_into(b: &mut B, u: &[QubitId], v: &[QubitId], flag: QubitId) {
     dialog_gcd_cmp_gt_truncated_into_width(b, u, v, flag, dialog_gcd_compare_bits().min(u.len()));
 }
@@ -25261,29 +25300,57 @@ fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps_block_lifecycle(
             let slot = step - start;
             let b0 = raw_block[2 * slot];
             let b0_and_b1 = raw_block[2 * slot + 1];
-            let cmp = b.alloc_qubit();
             let active_width = dialog_gcd_tobitvector_active_width(step);
             let u_active = &u[..active_width];
             let v_active = &v[..active_width];
             let compare_bits = dialog_gcd_compare_bits_for_step(step, active_width);
 
+            let borrowed_carries = dialog_gcd_compressed_sidecar_future_carry_slice(
+                compressed_log,
+                step,
+                active_width,
+            );
+
             b.set_phase("dialog_gcd_compressed_block_tobitvector_branch_bits");
             b.cx(v[0], b0);
             if dialog_gcd_fused_branch_bits_enabled() {
-                dialog_gcd_ccx_cmp_gt_truncated_into_width(
-                    b,
-                    u_active,
-                    v_active,
-                    b0,
-                    b0_and_b1,
-                    compare_bits,
-                );
+                // Fused path derives b0_and_b1 from the in-flight comparator carry
+                // and never materializes a separate `cmp` ancilla. Allocating it
+                // here would add a dead live-qubit at the branch_bits peak instant
+                // (peak is measured by simultaneously-live count, not qubit-id reuse),
+                // so it is allocated only on the non-fused branch below.
+                if dialog_gcd_branch_bits_host_comparator_enabled() {
+                    // Host the comparator's c_in+carries transient on the idle
+                    // future-log slice (the same slice the subtract borrows below;
+                    // it is unwritten at the comparator instant) so branch_bits no
+                    // longer allocates its own peak qubit. Value-exact; the slice is
+                    // returned clean by the measured uncompute sweep.
+                    dialog_gcd_ccx_cmp_gt_truncated_into_width_hosted(
+                        b,
+                        u_active,
+                        v_active,
+                        b0,
+                        b0_and_b1,
+                        compare_bits,
+                        borrowed_carries,
+                    );
+                } else {
+                    dialog_gcd_ccx_cmp_gt_truncated_into_width(
+                        b,
+                        u_active,
+                        v_active,
+                        b0,
+                        b0_and_b1,
+                        compare_bits,
+                    );
+                }
             } else {
+                let cmp = b.alloc_qubit();
                 dialog_gcd_cmp_gt_truncated_into_width(b, u_active, v_active, cmp, compare_bits);
                 b.ccx(b0, cmp, b0_and_b1);
                 dialog_gcd_cmp_gt_truncated_into_width(b, u_active, v_active, cmp, compare_bits);
+                b.free(cmp);
             }
-            b.free(cmp);
 
             b.set_phase("dialog_gcd_compressed_block_tobitvector_cswap");
             for (i, (&ui, &vi)) in u_active.iter().zip(v_active.iter()).enumerate() {
@@ -25294,11 +25361,6 @@ fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps_block_lifecycle(
             }
 
             b.set_phase("dialog_gcd_compressed_block_tobitvector_subtract");
-            let borrowed_carries = dialog_gcd_compressed_sidecar_future_carry_slice(
-                compressed_log,
-                step,
-                active_width,
-            );
             dialog_gcd_controlled_sub_selected(b, u_active, v_active, b0, borrowed_carries);
 
             b.set_phase("dialog_gcd_compressed_block_tobitvector_shift");
@@ -25340,7 +25402,6 @@ fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps_reverse_block_lifecycle(
             let slot = step - start;
             let b0 = raw_block[2 * slot];
             let b0_and_b1 = raw_block[2 * slot + 1];
-            let cmp = b.alloc_qubit();
             let active_width = dialog_gcd_tobitvector_active_width(step);
             let u_active = &u[..active_width];
             let v_active = &v[..active_width];
@@ -25367,20 +25428,39 @@ fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps_reverse_block_lifecycle(
 
             b.set_phase("dialog_gcd_compressed_block_tobitvector_reverse_branch_bits");
             if dialog_gcd_fused_branch_bits_enabled() {
-                dialog_gcd_ccx_cmp_gt_truncated_into_width(
-                    b,
-                    u_active,
-                    v_active,
-                    b0,
-                    b0_and_b1,
-                    compare_bits,
-                );
+                // Fused path: no separate `cmp` ancilla (derives b0_and_b1 from the
+                // comparator carry). Allocating it would add a dead live-qubit at the
+                // reverse_branch_bits peak instant, so allocate only on the non-fused
+                // branch below. See forward lifecycle for the rationale.
+                if dialog_gcd_branch_bits_host_comparator_enabled() {
+                    // Mirror of the forward path: host the comparator transient on
+                    // the idle future-log slice (same slice the add borrowed above).
+                    dialog_gcd_ccx_cmp_gt_truncated_into_width_hosted(
+                        b,
+                        u_active,
+                        v_active,
+                        b0,
+                        b0_and_b1,
+                        compare_bits,
+                        borrowed_carries,
+                    );
+                } else {
+                    dialog_gcd_ccx_cmp_gt_truncated_into_width(
+                        b,
+                        u_active,
+                        v_active,
+                        b0,
+                        b0_and_b1,
+                        compare_bits,
+                    );
+                }
             } else {
+                let cmp = b.alloc_qubit();
                 dialog_gcd_cmp_gt_truncated_into_width(b, u_active, v_active, cmp, compare_bits);
                 b.ccx(b0, cmp, b0_and_b1);
                 dialog_gcd_cmp_gt_truncated_into_width(b, u_active, v_active, cmp, compare_bits);
+                b.free(cmp);
             }
-            b.free(cmp);
             b.cx(v[0], b0);
         }
     }
@@ -28319,6 +28399,66 @@ fn cmp_lt_into_fast_borrowed_carries(
     }
 }
 
+/// Controlled (`target ^= ctrl & (u < v)`) borrow-comparator that takes its
+/// `c_in` + `carries` lanes as borrowed clean (|0>) qubits instead of allocating
+/// them. Identical gate sequence to `ccx_cmp_lt_into_fast` except the final
+/// reduction is `ccx(ctrl, u[n-1], target)` (controlled). The borrowed lanes are
+/// restored to |0> by the measured backward inv-MAJ sweep, so the host slice is
+/// returned clean (Bennett/measured-clean, safe outside emit_inverse since it
+/// uses hmr/cz_if not a recompute). Used by the GCD branch-bit comparator to host
+/// its transient on the idle future-log region, freeing the peak qubit it would
+/// otherwise allocate at the branch_bits instant.
+fn ccx_cmp_lt_into_fast_borrowed_carries(
+    b: &mut B,
+    u: &[QubitId],
+    v: &[QubitId],
+    ctrl: QubitId,
+    target: QubitId,
+    c_in: QubitId,
+    carries: &[QubitId],
+) {
+    let n = u.len();
+    assert_eq!(n, v.len());
+    assert!(n > 0);
+    assert!(carries.len() >= n);
+
+    for i in 0..n {
+        b.x(u[i]);
+    }
+
+    b.cx(u[0], v[0]);
+    b.cx(u[0], c_in);
+    b.ccx(c_in, v[0], carries[0]);
+    b.cx(carries[0], u[0]);
+    for i in 1..n {
+        b.cx(u[i], v[i]);
+        b.cx(u[i], u[i - 1]);
+        b.ccx(u[i - 1], v[i], carries[i]);
+        b.cx(carries[i], u[i]);
+    }
+
+    b.ccx(ctrl, u[n - 1], target);
+
+    for i in (1..n).rev() {
+        b.cx(carries[i], u[i]);
+        let m = b.alloc_bit();
+        b.hmr(carries[i], m);
+        b.cz_if(u[i - 1], v[i], m);
+        b.cx(u[i], u[i - 1]);
+        b.cx(u[i], v[i]);
+    }
+    b.cx(carries[0], u[0]);
+    let m0 = b.alloc_bit();
+    b.hmr(carries[0], m0);
+    b.cz_if(c_in, v[0], m0);
+    b.cx(u[0], c_in);
+    b.cx(u[0], v[0]);
+
+    for i in 0..n {
+        b.x(u[i]);
+    }
+}
+
 fn round556_load_gated_shifted_source(
     b: &mut B,
     control: QubitId,
@@ -29555,7 +29695,7 @@ fn configure_ecdsafail_submission_route() {
     set_default_env("DIALOG_GCD_COMPARE_BITS", "59");
     set_default_env("DIALOG_GCD_APPLY_CLEAN_COMPARE_BITS", "19");
     set_default_env("DIALOG_GCD_RAW_PA", "1");
-    set_default_env("DIALOG_GCD_ACTIVE_ITERATIONS", "398");
+    set_default_env("DIALOG_GCD_ACTIVE_ITERATIONS", "399");
     set_default_env("DIALOG_GCD_RAW_IPMUL_TERMINAL_REUSE", "1");
     set_default_env("DIALOG_GCD_RAW_IPMUL_CLEAR_P_RESIDUAL", "1");
     set_default_env("DIALOG_GCD_RAW_QUOTIENT_TERMINAL_REUSE", "1");
@@ -29638,13 +29778,31 @@ fn configure_ecdsafail_submission_route() {
     // 1,718,717) for -42q: 1500 x 1,718,717 = 2,578,075,500.
     set_default_env("KARA_Z02_LOWQ", "1");
     set_default_env("KARA_SOL_MOD_VENT", "1");
-    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT", "99");
-    // The lowq/hosted/vented squares + F_CUT=99 + 398 active iterations op-stream
-    // re-rolls the Fiat-Shamir island. 2-D (DIALOG_REROLL x
-    // DIALOG_POST_SUB_REROLL) search lands 14/2 clean 0/0/0 over 9024 at 1500q and
-    // 1,716,661 avg executed Toffoli.
-    set_default_env("DIALOG_REROLL", "14");
-    set_default_env("DIALOG_POST_SUB_REROLL", "2");
+    // PEAK 1500 -> 1466 (-34q). On the 1500 floor the peak was a co-binder tie between
+    // the GCD-core branch comparator (tobitvector_branch_bits / _reverse) and the apply
+    // mod add/sub (materialized_special_chunked_raw_sum / _difference). The apply phase
+    // can be driven down by widening the chunk cut (each +1 F_CUT -> -2 apply peak), but
+    // only until it meets the comparator floor -- so the comparator is torn down first.
+    //  - DIALOG_GCD_BRANCH_BITS_HOST_COMPARATOR=1: the fused branch-bit path never used
+    //    the separately-allocated `cmp` ancilla (it derives b0_and_b1 from the in-flight
+    //    comparator carry), and the comparator materialized its own c_in+carries lane on
+    //    top of the live GCD state. Routing the fused path through the borrowed-carry
+    //    comparator (carry lane hosted on a temporarily-clean future-log slice) + dropping
+    //    the dead cmp removes that standalone transient. Value-exact (ancilla returned
+    //    clean); the branch_bits phases fall well below the apply tier.
+    //  - DIALOG_GCD_APPLY_CHUNKED_F_CUT 99 -> 116: with the comparator unbound, widening
+    //    the cut sinks BOTH apply phases to the next true floor -- the materialized_*_body
+    //    GCD-body tier at 1466. Exact for any cut (full cuccaro + exact [..F_CUT] clear).
+    //    F_CUT=116 is the optimum (beyond it peak stays 1466, Toffoli keeps rising).
+    // Net peak 1500 -> 1466 for +13,566 avg-executed Toffoli (1,718,717 -> 1,732,283) ~=
+    // 399 T/qubit, far inside break-even. Score 1466 x 1,732,283 = 2,539,526,878.
+    set_default_env("DIALOG_GCD_BRANCH_BITS_HOST_COMPARATOR", "1");
+    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT", "116");
+    // The hosted comparator + F_CUT=116 op-stream re-rolls the Fiat-Shamir island. 2-D
+    // (DIALOG_REROLL x DIALOG_POST_SUB_REROLL) search lands 16/0 clean 0/0/0 over all 9024
+    // shots at 1466q and 1,732,283 avg executed Toffoli.
+    set_default_env("DIALOG_REROLL", "16");
+    set_default_env("DIALOG_POST_SUB_REROLL", "0");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
     // separate cmp qubit and recomputing the comparator for uncompute. Pure
