@@ -37,8 +37,32 @@ pub(crate) fn shift22_carrytail_cut() -> usize {
     let w = std::env::var("SHIFT22_CARRYTAIL_W")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(37);
+        .unwrap_or(33);
     33usize.saturating_add(w)
+}
+
+/// SHIFT22_SPILL_CARRYTAIL (default-ON): truncate the ripple-carry chain of the
+/// shift22 STEP-2 spill ops in the LOWQ (NON-fast, no-Hmr) path.  The added
+/// operand `padded` is a 22-bit SPARSE quantum spill (bits >= 22 are |0>), so the
+/// carry can only propagate a short run above the spill region.  When ON, the five
+/// forward `cuccaro_add`/`cuccaro_sub` calls (and their five reversals) are routed
+/// through `cuccaro_add_cut`/`cuccaro_sub_cut` with a cut of `22 + W`
+/// (`SHIFT22_SPILL_W`, default 41 -> cut=63), computing the carry chain only `W`
+/// bits above the spill.  The SAME cut is used forward and reverse (phase-parity).
+/// Set SHIFT22_SPILL_CARRYTAIL=0 to disable (W=41 island validated 9024-clean).
+pub(crate) fn shift22_spill_carrytail() -> bool {
+    std::env::var("SHIFT22_SPILL_CARRYTAIL").ok().as_deref() != Some("0")
+}
+
+/// Carry-tail cut width for the shift22 STEP-2 spill ops: `22 + W` where W is
+/// `SHIFT22_SPILL_W` (default 41).  Single value, used identically in every
+/// forward spill op and its reversal (phase-parity law).
+pub(crate) fn shift22_spill_carrytail_cut() -> usize {
+    let w = std::env::var("SHIFT22_SPILL_W")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(41);
+    22usize.saturating_add(w)
 }
 
 pub(crate) fn lowq_shift22() -> bool {
@@ -89,7 +113,15 @@ pub(crate) fn mod_shift_left_by_k(
         let v_slice: Vec<QubitId> = v_ext[pos..n + 1].to_vec();
         let c_in = b.alloc_qubit();
         if lowq_shift22() {
-            if is_sub {
+            if shift22_spill_carrytail() {
+                // CARRY-TAIL: truncate the sparse-spill ripple at 22+W bits.
+                let cut = shift22_spill_carrytail_cut();
+                if is_sub {
+                    cuccaro_sub_cut(b, &padded, &v_slice, c_in, cut);
+                } else {
+                    cuccaro_add_cut(b, &padded, &v_slice, c_in, cut);
+                }
+            } else if is_sub {
                 cuccaro_sub(b, &padded, &v_slice, c_in);
             } else {
                 cuccaro_add(b, &padded, &v_slice, c_in);
@@ -219,7 +251,15 @@ pub(crate) fn mod_shift_right_by_k(
         let v_slice: Vec<QubitId> = v_ext[pos..n + 1].to_vec();
         let c_in = b.alloc_qubit();
         if lowq_shift22() {
-            if is_sub {
+            if shift22_spill_carrytail() {
+                // Exact inverse of the forward spill op: SAME cut (phase-parity).
+                let cut = shift22_spill_carrytail_cut();
+                if is_sub {
+                    cuccaro_sub_cut(b, &padded, &v_slice, c_in, cut);
+                } else {
+                    cuccaro_add_cut(b, &padded, &v_slice, c_in, cut);
+                }
+            } else if is_sub {
                 cuccaro_sub(b, &padded, &v_slice, c_in);
             } else {
                 cuccaro_add(b, &padded, &v_slice, c_in);

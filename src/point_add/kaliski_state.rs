@@ -77,14 +77,7 @@ pub(crate) fn kal_wtrunc_enabled() -> bool {
 pub(crate) fn kal_wtrunc_k0() -> usize {
     // T-squeeze: K0=25 (was 26) — envelope decay starts 1 iter earlier. Validates on
     // the cswap-base margin=0 island only with the R=325 re-roll (K0=24 rejects).
-    // FS-RE-ROLL T-squeeze: K0=20 (was 22). The envelope decay starts 2 iters
-    // earlier, shaving ~8.8k emitted CCX across step2/3/4. K0=20 just misses the
-    // default-seed lottery, but the free KAL_REROLL knob (identity X;X pairs,
-    // zero Toffoli / peak) lands a clean 9024 island at rr=12 — validated 0/0/0,
-    // flat peak 2309, avg-exec 2,410,038 T × 2309 = 5,564,777,742. The baked
-    // KAL_REROLL default (=12) is CO-TUNED to this K0; changing either re-rolls
-    // the Fiat-Shamir input set and must be re-searched.
-    env_usize("KAL_WTRUNC_K0").unwrap_or(20)
+    env_usize("KAL_WTRUNC_K0").unwrap_or(21)
 }
 
 pub(crate) fn kal_wtrunc_margin() -> usize {
@@ -118,30 +111,11 @@ pub(crate) fn kal_wtrunc_width(iter_idx: usize, n: usize) -> usize {
     let env = if iter_idx < k0 {
         n
     } else {
-        // n - floor((it-k0)*num/den); saturating so it never underflows.
-        // Default slope 2/3. A STEEPER slope (e.g. 3/4, 5/7) shaves more width
-        // in the mid/late iters where the GCD bitlen has the most envelope slack;
-        // co-tune with KAL_REROLL to land a clean Fiat-Shamir island.
-        let dec = ((iter_idx - k0) * kal_wtrunc_slope_num()) / kal_wtrunc_slope_den();
-        // Floor so a steeper-than-default slope never collapses a width loop to 0
-        // (the comparator/cswap index [0]). Default slope 2/3 bottoms at ~3 and is
-        // unaffected by a floor of 3.
-        n.saturating_sub(dec).max(kal_wtrunc_floor())
+        // n - floor((it-k0)*2/3); saturating so it never underflows.
+        let dec = ((iter_idx - k0) * 2) / 3;
+        n.saturating_sub(dec)
     };
     (env + margin).min(n)
-}
-
-pub(crate) fn kal_wtrunc_floor() -> usize {
-    env_usize("KAL_WTRUNC_FLOOR").unwrap_or(3)
-}
-
-pub(crate) fn kal_wtrunc_slope_num() -> usize {
-    env_usize("KAL_WTRUNC_SLOPE_NUM").unwrap_or(2)
-}
-
-pub(crate) fn kal_wtrunc_slope_den() -> usize {
-    let d = env_usize("KAL_WTRUNC_SLOPE_DEN").unwrap_or(3);
-    if d == 0 { 3 } else { d }
 }
 
 /// CSWAP W-TRUNC (default-ON): narrow the bulk Kaliski step3/step9 (u,v_w)
@@ -280,17 +254,8 @@ pub(crate) fn kal_carrytail_w() -> usize {
     // 44->36 (chain to bit 33+36=69; the direct-double's extra truncated sites re-roll
     // the island so W=36 lands clean — W∈{32,33,34,35,37,40,44} reject with DOUBLE on).
     // DOUBLE + W=36 = 2,462,914 × 2309 = 5,686,868,426 (9024-clean, flat peak 2309).
-    // OPTIMIZER ctW=19: both-path carry-tail dropped 20->19 (sub-borrow cut
-    // 33+19=52, still >> the 19-bit MC sub-borrow max at bit 51; the add-path
-    // truncation is the lottery source). The 1-bit-tighter window re-rolled the
-    // Fiat-Shamir island; a 128-reroll screen found clean islands at rr=35 and
-    // rr=86 (identical avg-exec 2,408,761 T, flat peak 2309 = 5,561,829,149,
-    // validated 0/0/0 over 9024 by official benchmark.sh). The baked KAL_REROLL
-    // default (=35, see mod.rs) is CO-TUNED to this W; changing either re-rolls
-    // the input set and must be re-searched. W=18 has no clean island in 64
-    // rerolls (too aggressive). −1,277 avg-exec Toffoli vs the W=20 baseline.
     let default = if kal_carrytail_add_enabled() {
-        19
+        20
     } else if kal_cswap_wtrunc_enabled() {
         26
     } else {

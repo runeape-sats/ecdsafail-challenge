@@ -136,14 +136,8 @@ mod builder;
 #[allow(unused_imports)]
 pub(crate) use builder::*;
 
-mod screen;
-
 
 pub fn build() -> Vec<Op> {
-    // DEV-ONLY: if KAL_SCREEN is set, run the in-process reroll/knob sweep and
-    // exit. No-op on the scored path (var unset). See screen.rs.
-    screen::maybe_run_screen();
-
     let b = &mut B::new();
     // Register 0: target_x (quantum)
     let tx = b.alloc_qubits(N);
@@ -249,32 +243,6 @@ pub fn build() -> Vec<Op> {
                 b.ccx(a, bq, c);
             }
             b.free(c);
-        }
-    }
-
-    // ── KAL_REROLL: FREE Fiat-Shamir re-roll knob. The test inputs are a
-    // SHAKE256 hash over the whole op stream (op count + every op's fields,
-    // Cliffords included), so appending `rr` self-cancelling X;X pairs on an
-    // already-live output qubit (identity, zero Toffoli, zero new qubits, no
-    // phase) deterministically re-rolls all 9024 shots WITHOUT changing the
-    // scored circuit (peak/Toffoli unchanged). This turns the empirical
-    // truncation "island lottery" (carry-tail W, W-TRUNC K0/envelope, R_SMALL)
-    // into a searchable axis: hold a tighter-than-floor truncation and sweep
-    // `rr` until the resulting input set validates 0/0/0. Default 0 = no-op.
-    {
-        // Baked default rr=35 is CO-TUNED to the carry-tail W=19 island
-        // (kal_carrytail_w, see kaliski_state.rs): it lands a clean 9024
-        // Fiat-Shamir island for that op stream (avg-exec 2,408,761 T × 2309,
-        // validated 0/0/0). rr=86 is an equivalent alternate island. Re-search
-        // this value whenever any scored op (truncation knob / structural edit)
-        // changes the op stream. (Prior rr=12 was co-tuned to W=20.)
-        let rr: usize = std::env::var("KAL_REROLL")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(35);
-        for _ in 0..rr {
-            b.x(tx[0]);
-            b.x(tx[0]);
         }
     }
 
