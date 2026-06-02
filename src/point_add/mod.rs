@@ -262,16 +262,20 @@ pub fn build() -> Vec<Op> {
     // into a searchable axis: hold a tighter-than-floor truncation and sweep
     // `rr` until the resulting input set validates 0/0/0. Default 0 = no-op.
     {
-        // Baked default rr=13 is CO-TUNED to the R_SMALL=327 + K0=20 + slack=0 +
-        // mfw=232 op stream: it lands a clean 9024 Fiat-Shamir island for that stream
-        // (avg-exec 2,571,903 T × 2002 peak = 5,148,949,806, screened 0/0/0).
-        // Re-search this value whenever any scored op (slack/mfw/truncation/K0 knob /
-        // structural edit) changes the op stream. (Prior rr=34 was co-tuned to the
-        // R_SMALL=327 + K0=21 stream at 5,157,758,606.)
+        // Baked default rr=43 is CO-TUNED to the validated C* op stream (dialog
+        // fold + affine recompute mfw243 + early-recover, slack=4, margin=0): it
+        // lands a clean 9024 Fiat-Shamir island for that stream (avg-exec
+        // 2,560,503 T × 2025 peak = 5,185,018,575, validated 0/0/0). Re-search this
+        // value whenever any scored op (truncation knob / structural edit) changes
+        // the op stream. (Prior rr=35 was co-tuned to the pre-C* W=19 stream;
+        // rr=40 is an equivalent alternate C* island.)
+        // rr=5 is CO-TUNED to the safe_iters=329 op stream (uv-cswap merge extended
+        // 254->329): the SI change re-rolls SHAKE256, and rr=5 lands the clean 9024
+        // island at avg-exec 2,553,083 T × 2006 peak = 5,121,484,498 (validated 0/0/0).
         let rr: usize = std::env::var("KAL_REROLL")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(13);
+            .unwrap_or(5);
         for _ in 0..rr {
             b.x(tx[0]);
             b.x(tx[0]);

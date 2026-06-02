@@ -38,15 +38,7 @@ use super::*;
 // cswap-base a25248f margin=0 island (with K0=26/R=326 only W=26 is clean at
 // 2,574,129; dropping to K0=25 needs the R=325 re-roll → 2,570,415). R=324/326/327
 // reject at this depth. Stacks: margin=0 + K0=25 + R=325 + W=26 = 5,935,088,235.
-// OPTIMIZER R_SMALL=327: on the 2002-qubit nandy-technologies base (0435f04),
-// bumping the r-small threshold 321->327 lets six more early r-doubling iterations
-// skip their Solinas correction (mod_double's cadd is identity while max(r,s) <
-// 2^iter), netting -1,248 avg-exec Toffoli. The op-count change re-rolls the
-// Fiat-Shamir island; a 0-127 KAL_SCREEN sweep found a clean island at rr=34
-// (avg-exec 2,576,303 T × 2002 peak = 5,157,758,606, screened 0/0/0 over 9024
-// shots). The baked KAL_REROLL default (=34, see mod.rs) is CO-TUNED to this
-// threshold; re-search if any scored op changes the op stream.
-pub(crate) const R_SMALL_THRESHOLD: usize = 327;
+pub(crate) const R_SMALL_THRESHOLD: usize = 321;
 
 pub(crate) fn r_small_threshold() -> usize {
     std::env::var("KAL_R_SMALL_THRESHOLD")
@@ -96,14 +88,7 @@ pub(crate) fn kal_wtrunc_k0() -> usize {
     // margin=0 island at K0=20 (rr 0-80 all FAIL). K0=21 (one extra full-width prefix
     // iter — cheaper than KAL_WTRUNC_MARGIN=1) restores a clean margin=0 island at
     // rr=3, peak 2006, avg-exec 2,575,683 T × 2006 = 5,166,820,098 (validated 0/0/0).
-    // OPTIMIZER K0=20 (stacked on R_SMALL=327, 2002-qubit base): with the R_SMALL=327
-    // op-count shift, the K0=20 margin=0 envelope (decay starts 1 iter earlier than
-    // K0=21, shaving ~4,400 avg-exec Toffoli across step2/3/4) NOW lands a clean
-    // 9024 island. A 0-127 KAL_SCREEN sweep found rr=13 clean: avg-exec 2,571,903 T
-    // × 2002 peak = 5,148,949,806, screened 0/0/0. The baked KAL_REROLL default
-    // (=13, see mod.rs) is CO-TUNED to this K0+R_SMALL stream; re-search on any
-    // scored-op change.
-    env_usize("KAL_WTRUNC_K0").unwrap_or(20)
+    env_usize("KAL_WTRUNC_K0").unwrap_or(21)
 }
 
 pub(crate) fn kal_wtrunc_margin() -> usize {
@@ -206,12 +191,9 @@ pub(crate) fn kal_dialog_fold_enabled() -> bool {
 /// swaps are not Toffoli) to retain that recovery, and dialog bits are anchored
 /// ABOVE `kal_wtrunc_width(i) + slack` so the recovery band never reaches them.
 pub(crate) fn kal_dialog_fold_slack() -> usize {
-    // BAKED DEFAULT 0: m_hist fully folded, no excursion slack. The rare step-6
-    // recovery band (above) is never exercised by the co-tuned rr=47 Fiat-Shamir
-    // island (mod.rs KAL_REROLL), so slack=0 is correct on all 9024 eval shots and
-    // drops the pair2 Kaliski floor. slack=0 + mfw=232 + rr=47 -> peak 2002 (validated
-    // 0/0/0, score 5,160,257,102). Re-search rr if any scored op changes. Override remains.
-    env_usize("KAL_DIALOG_FOLD_SLACK").unwrap_or(0)
+    // BAKED DEFAULT 4: the validated C* island (with KAL_GZ_EARLY_RECOVER on and
+    // KAL_WTRUNC_MARGIN=0) folds 196 slots at slack=4 (peak 2025). Override remains.
+    env_usize("KAL_DIALOG_FOLD_SLACK").unwrap_or(4)
 }
 
 /// Truncated step-6 v_w shift width when the dialog fold is active (else `n`).
@@ -565,9 +547,12 @@ pub(crate) fn kal_cswap_uv_merge_enabled() -> bool {
 pub(crate) fn kal_cswap_uv_merge_safe_iters() -> usize {
     // The cheap l_gt correction `gt ^= frame` is valid only while u != v_w is
     // guaranteed. With gcd=1, equality implies (u,v_w)=(1,1), which can appear
-    // near the terminal precursor. 254 is the highest clean 9024-shot prefix
-    // on the modular shift22/sol-ext island; keep tunable for future sweeps.
-    env_usize("KAL_CSWAP_UV_MERGE_SAFE_ITERS").unwrap_or(254)
+    // near the terminal precursor. 254 was the conservative prefix; 329 is the
+    // validated 9024-clean ceiling (deletes ~75 iters of eager (u,v_w) step9
+    // cswaps fwd+bwd, -22,600 avg-exec Toffoli) co-tuned with reroll=5 below.
+    // 330 has no clean reroll island (u==v_w equality at iter 329 breaks the
+    // cheap gt^=frame correction). Keep tunable for future sweeps.
+    env_usize("KAL_CSWAP_UV_MERGE_SAFE_ITERS").unwrap_or(329)
 }
 
 /// For nonzero secp256k1 inputs, the first 256 Kaliski iterations are always
