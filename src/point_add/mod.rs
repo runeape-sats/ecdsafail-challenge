@@ -29324,23 +29324,26 @@ fn configure_ecdsafail_submission_route() {
     // apply phase drops under the ROUND84 peak binder. The asymmetric first cut
     // trims boundary-clear comparators while staying peak-safe (1567q).
     set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_BLOCKS", "2");
-    // F_CUT=82 (not 70): rebalances the chunked apply add/sub split so the big
-    // chunk shrinks from [70,257)=187 to [82,257)=175 wide. Peak = base +
-    // 2·(big-chunk width), so this drops the apply peak 1558→1542 and the global
-    // peak 1558→1543 (now bound by round84 x-tail square). Cost +9,576 executed
-    // Toffoli (exact boundary-clear comparator 70→82 bits × 399 steps × 2). Net
-    // −10.5M score. Co-tuned reroll 9/4. (F_CUT=78 would be cheaper but has no
-    // clean FS island in the standard grid; 82 is the lowest-cost peak-1543 cut
-    // that lands clean.)
-    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT", "82");
+    // F_CUT=79 (not 82 or 70): rebalances the chunked apply add/sub split so the
+    // big chunk shrinks to [79,257)=178 wide. Peak = base + 2·(big-chunk width),
+    // so this drops the apply peak 1558→1540 and the global peak 1558→1543 (now
+    // bound by round84 x-tail square at 1543). F_CUT=79 is the LOWEST cut whose
+    // apply peak (1540) clears the 1543 square binder, so it is the cheapest
+    // peak-1543 cut: +7,182 executed Toffoli vs the cut=70 base (the boundary-
+    // clear comparator widens 70→79 bits × 399 steps × 2), which is −2,394 cheaper
+    // than the cut=82 route. Needs its own Fiat-Shamir island: REROLL=0 +
+    // POST_SUB_REROLL=26 validates 0/0/0 over 9024 at 1543q, 1,695,885 avg
+    // executed Toffoli ⇒ score 2,616,750,555 (found by a 2-D reroll grid search;
+    // cut=78 had no clean island in a 250-config grid, cut=79 lands at rr0/p26).
+    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT", "79");
     // ROUND84 x-tail square 2^32-term: replace shift-by-22 with 22 mod-p
     // doublings + sub + 22 halvings. Removes the shift's 24 persistent spill
     // flags that bound the global peak at 1567 → peak 1558 (−9), +4,788 Toffoli.
     set_default_env("KARA_SOL_SHIFT22_DOUBLES", "1");
-    // Compare58 requires a fresh Fiat-Shamir island: 1/14 validates 0/0/0 over
-    // 9024 at 1567q and 1,682,963 avg executed Toffoli.
-    set_default_env("DIALOG_REROLL", "9");
-    set_default_env("DIALOG_POST_SUB_REROLL", "4");
+    // Fiat-Shamir island co-tuned for the F_CUT=79 op-stream (REROLL=0,
+    // POST_SUB_REROLL=26 validates 0/0/0 over 9024 at 1543q, 1,695,885 Toffoli).
+    set_default_env("DIALOG_REROLL", "0");
+    set_default_env("DIALOG_POST_SUB_REROLL", "26");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
     // separate cmp qubit and recomputing the comparator for uncompute. Pure
