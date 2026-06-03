@@ -29919,7 +29919,7 @@ fn configure_ecdsafail_submission_route() {
     // PA9024 compare-schedule margin retuned with ACTIVE_ITERATIONS=396 and
     // APPLY_CLEAN_COMPARE_BITS=21. The wider margin gives back a little Toffoli
     // but lands the 1438q clean island at DIALOG_REROLL=3 / POST_SUB=51 below.
-    set_default_env("DIALOG_GCD_PA9024_COMPARE_SCHEDULE_MARGIN", "8");
+    set_default_env("DIALOG_GCD_PA9024_COMPARE_SCHEDULE_MARGIN", "7");
     set_default_env("KAL_DOUBLE_CARRY_TRUNC_W", "20");
     set_default_env("KAL_FOLD_CARRY_TRUNC_W", "20");
     set_default_env("DIALOG_GCD_ROUND763_DEDUP", "1");
@@ -29935,7 +29935,7 @@ fn configure_ecdsafail_submission_route() {
     // stacked on the 1446-peak base + ACTIVE_ITERATIONS=397 via the reroll-37/1
     // island documented below.
     set_default_env("DIALOG_GCD_COMPARE_BITS", "58");
-    set_default_env("DIALOG_GCD_APPLY_CLEAN_COMPARE_BITS", "21");
+    set_default_env("DIALOG_GCD_APPLY_CLEAN_COMPARE_BITS", "20");
     set_default_env("DIALOG_GCD_RAW_PA", "1");
     // 399 -> 396. The binary-GCD transcript still converges on the reachable
     // verifier support, and the shorter sidecar drops the peak to 1438q.
@@ -29976,7 +29976,11 @@ fn configure_ecdsafail_submission_route() {
     // W-TRUNC tightening: GCD-body width envelope margin. Re-scanned for the
     // Karatsuba x-tail op stream: margin=27 + REROLL=0 lands a clean 9024-shot
     // island (anupsv's margin=26/REROLL=20 was for the schoolbook stream).
-    set_default_env("DIALOG_GCD_WIDTH_MARGIN", "27");
+    // WIDTH_MARGIN 27->26 stacked with APPLY_CLEAN_COMPARE_BITS 21->20 and
+    // PA9024_COMPARE_SCHEDULE_MARGIN 8->7: -5,576 executed Toffoli at the 1434
+    // peak. Re-rolled Fiat-Shamir island lands clean (0/0/0 over 9024) at
+    // DIALOG_REROLL=0 / DIALOG_POST_SUB_REROLL=44. 1434q x 1,733,573 T = 2,485,943,682.
+    set_default_env("DIALOG_GCD_WIDTH_MARGIN", "26");
     // Measured (Gidney) uncompute for the apply-phase modular subtract's raw
     // difference, mirroring the already-measured apply ADD. ~n Toffoli instead
     // of ~2n per call; peak-neutral (same carry lane the ADD already uses).
@@ -30066,8 +30070,8 @@ fn configure_ecdsafail_submission_route() {
     set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT2", "130");
     // Active-396 island: compare_bits=58 + apply_clean=21 + schedule margin=8
     // validates 0/0/0 over all 9024 shots at 1438q x 1,736,773 T.
-    set_default_env("DIALOG_REROLL", "214");
-    set_default_env("DIALOG_POST_SUB_REROLL", "466");
+    set_default_env("DIALOG_REROLL", "0");
+    set_default_env("DIALOG_POST_SUB_REROLL", "44");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
     // separate cmp qubit and recomputing the comparator for uncompute. Pure
