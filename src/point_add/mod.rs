@@ -23987,6 +23987,20 @@ fn dialog_gcd_apply_chunked_f_cut2() -> Option<usize> {
         .filter(|&cut| (1..N).contains(&cut))
 }
 
+fn dialog_gcd_apply_chunked_f_cut3() -> Option<usize> {
+    std::env::var("DIALOG_GCD_APPLY_CHUNKED_F_CUT3")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&cut| (1..N).contains(&cut))
+}
+
+fn dialog_gcd_apply_chunked_f_custom4_enabled() -> bool {
+    std::env::var("DIALOG_GCD_APPLY_CHUNKED_F_CUSTOM4")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
 fn dialog_gcd_apply_chunked_f_reuse_cin_zero_enabled() -> bool {
     std::env::var("DIALOG_GCD_APPLY_CHUNKED_F_REUSE_CIN_ZERO")
         .ok()
@@ -25231,6 +25245,20 @@ fn dialog_gcd_clear_controlled_slice_hmr(
 }
 
 fn dialog_gcd_chunk_hi(blocks: usize, block: usize, ext_n: usize) -> usize {
+    if blocks == 4 && dialog_gcd_apply_chunked_f_custom4_enabled() {
+        let cuts = [
+            dialog_gcd_apply_chunked_f_cut().unwrap_or(ext_n / 4),
+            dialog_gcd_apply_chunked_f_cut2().unwrap_or(ext_n / 2),
+            dialog_gcd_apply_chunked_f_cut3().unwrap_or(3 * ext_n / 4),
+        ];
+        assert!(
+            cuts[0] < cuts[1] && cuts[1] < cuts[2] && cuts[2] < ext_n,
+            "custom four-chunk apply boundaries must be strictly increasing and below {ext_n}: {cuts:?}"
+        );
+        if block < cuts.len() {
+            return cuts[block];
+        }
+    }
     if block == 0 && blocks <= 3 {
         return dialog_gcd_apply_chunked_f_cut().unwrap_or(ext_n / 2).min(ext_n - 1);
     }
@@ -26246,6 +26274,57 @@ fn dialog_gcd_runway_safe_future_prefix<'a>(
         .filter(|slice| !slice.is_empty())
 }
 
+fn dialog_gcd_composite_scratch_enabled() -> bool {
+    std::env::var("DIALOG_GCD_COMPOSITE_SCRATCH")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
+struct DialogGcdCompositeScratch {
+    lanes: Vec<QubitId>,
+    owned: Vec<QubitId>,
+}
+
+fn dialog_gcd_build_composite_scratch(
+    b: &mut B,
+    future: Option<&[QubitId]>,
+    u: &[QubitId],
+    v: &[QubitId],
+    compressed_log: &[QubitId],
+    raw_block: &[QubitId],
+    active_width: usize,
+) -> DialogGcdCompositeScratch {
+    let want = 2 * active_width - 1;
+    let mut lanes = Vec::with_capacity(want);
+    let mut push = |q: QubitId| {
+        if lanes.len() < want
+            && !lanes.contains(&q)
+            && !raw_block.contains(&q)
+            && !u[..active_width].contains(&q)
+            && !v[..active_width].contains(&q)
+        {
+            lanes.push(q);
+        }
+    };
+    if let Some(future) = dialog_gcd_runway_safe_future_prefix(future, u, active_width) {
+        for &q in future {
+            push(q);
+        }
+    }
+    for &q in &v[active_width..] {
+        push(q);
+    }
+    for &q in &u[active_width..] {
+        if !compressed_log.contains(&q) {
+            push(q);
+        }
+    }
+    let owned = b.alloc_qubits(want - lanes.len());
+    lanes.extend_from_slice(&owned);
+    DialogGcdCompositeScratch { lanes, owned }
+}
+
 fn dialog_gcd_pick_runway_safe_borrow_slice<'a>(
     future: Option<&'a [QubitId]>,
     u: &'a [QubitId],
@@ -26465,15 +26544,25 @@ fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps_block_lifecycle(
             let v_active = &v[..active_width];
             let compare_bits = dialog_gcd_compare_bits_for_step(step, active_width);
 
-            let borrowed_carries = dialog_gcd_pick_runway_safe_borrow_slice(
-                dialog_gcd_compressed_sidecar_future_carry_slice(
-                    compressed_log,
-                    step,
-                    active_width,
-                ),
-                u,
+            let future = dialog_gcd_compressed_sidecar_future_carry_slice(
                 compressed_log,
+                step,
                 active_width,
+            );
+            let composite_scratch = dialog_gcd_composite_scratch_enabled().then(|| {
+                dialog_gcd_build_composite_scratch(
+                    b,
+                    future,
+                    u,
+                    v,
+                    compressed_log,
+                    raw_block,
+                    active_width,
+                )
+            });
+            let borrowed_carries = composite_scratch.as_ref().map_or_else(
+                || dialog_gcd_pick_runway_safe_borrow_slice(future, u, compressed_log, active_width),
+                |scratch| Some(scratch.lanes.as_slice()),
             );
 
             b.set_phase("dialog_gcd_compressed_block_tobitvector_branch_bits");
@@ -26530,6 +26619,9 @@ fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps_block_lifecycle(
 
             b.set_phase("dialog_gcd_compressed_block_tobitvector_shift");
             dialog_gcd_shift_right_assuming_even(b, v_active);
+            if let Some(scratch) = composite_scratch {
+                b.free_vec(&scratch.owned);
+            }
         }
 
         b.set_phase("dialog_gcd_compressed_block_tobitvector_compress_block");
@@ -26616,15 +26708,25 @@ fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps_reverse_block_lifecycle(
             dialog_gcd_unshift_right_assuming_even(b, v_active);
 
             b.set_phase("dialog_gcd_compressed_block_tobitvector_reverse_add");
-            let borrowed_carries = dialog_gcd_pick_runway_safe_borrow_slice(
-                dialog_gcd_compressed_sidecar_future_carry_slice(
-                    compressed_log,
-                    step,
-                    active_width,
-                ),
-                u,
+            let future = dialog_gcd_compressed_sidecar_future_carry_slice(
                 compressed_log,
+                step,
                 active_width,
+            );
+            let composite_scratch = dialog_gcd_composite_scratch_enabled().then(|| {
+                dialog_gcd_build_composite_scratch(
+                    b,
+                    future,
+                    u,
+                    v,
+                    compressed_log,
+                    raw_block,
+                    active_width,
+                )
+            });
+            let borrowed_carries = composite_scratch.as_ref().map_or_else(
+                || dialog_gcd_pick_runway_safe_borrow_slice(future, u, compressed_log, active_width),
+                |scratch| Some(scratch.lanes.as_slice()),
             );
             dialog_gcd_controlled_add_selected(b, u_active, v_active, b0, borrowed_carries);
 
@@ -26672,6 +26774,9 @@ fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps_reverse_block_lifecycle(
                 b.free(cmp);
             }
             b.cx(v[0], b0);
+            if let Some(scratch) = composite_scratch {
+                b.free_vec(&scratch.owned);
+            }
         }
         if !owned_raw_block.is_empty() {
             b.free_vec(&owned_raw_block);
@@ -30950,7 +31055,8 @@ fn configure_ecdsafail_submission_route() {
     set_default_env("DIALOG_GCD_COMPRESSED_BLOCK_LIFECYCLE", "1");
     set_default_env("DIALOG_GCD_HOST_REVERSE_RAW_BLOCK", "1");
     set_default_env("DIALOG_GCD_COMPRESSED_LOG_U_HIGH_RUNWAY", "1");
-    set_default_env("DIALOG_GCD_COMPRESSED_LOG_U_HIGH_RUNWAY_BLOCKS", "4");
+    set_default_env("DIALOG_GCD_COMPRESSED_LOG_U_HIGH_RUNWAY_BLOCKS", "999");
+    set_default_env("DIALOG_GCD_COMPOSITE_SCRATCH", "1");
     set_default_env("DIALOG_GCD_APPLY_REPLAY_SWAP_HOST", "1");
     set_default_env("SQUARE_SELFHOST_SAFE_LANE_REUSE", "1");
     set_default_env("SQUARE_SELFHOST_GATE_SUFFIX_CARRIES", "1");
@@ -30979,13 +31085,7 @@ fn configure_ecdsafail_submission_route() {
     // island documented below.
     // Branch comparator 58 -> 57: -1,064 executed Toffoli, peak-neutral at 1434q,
     // stacked on the active395 base. Clean island at REROLL=4959 / POST_SUB=5983.
-    // Branch comparator 58 -> 56: -2,144 avg-executed Toffoli (1,724,981 ->
-    // 1,722,837), stacked on the 1411q square-carry base (457d964 / e0cfe2b).
-    // Peak-neutral at 1411 qubits. The tighter truncation re-rolls the
-    // Fiat-Shamir island; a 1-D reroll sweep (post_sub=0) lands a clean 0/0/0
-    // over all 9024 shots at DIALOG_REROLL=444 (set below). Verified via
-    // override-free eval_circuit. Score 2,433,948,191 -> 2,430,923,007.
-    set_default_env("DIALOG_GCD_COMPARE_BITS", "56");
+    set_default_env("DIALOG_GCD_COMPARE_BITS", "58");
     // Apply-phase cmod-correction comparator tightened 20 -> 19 (-790 executed
     // Toffoli, peak-neutral at 1434q) -- an orthogonal value-exact lever the
     // frontier had dropped, stacked on compare57+active395. Clean island below.
@@ -31009,7 +31109,7 @@ fn configure_ecdsafail_submission_route() {
     // different op count re-rolls the Fiat-Shamir island, co-tuned below
     // (WIDTH_MARGIN=27, REROLL=0). Validated 0/0/0 over 9024.
     // ROUND84_XTAIL_KARATSUBA=0 (+ROUND84_XTAIL_SCHOOLBOOK=1) restores schoolbook.
-    set_default_env("ROUND84_XTAIL_KARATSUBA", "1");
+    set_default_env("ROUND84_XTAIL_KARATSUBA", "0");
     // Slack-exploit: once round84's Solinas binder fell to 1543 (== the apply
     // tier), its doubling lanes (r84k_sol_dbl22/halve, peak 1538) sit 5q BELOW
     // the binder. Switching them to the fast (carry-ancilla) doubling is free at
@@ -31064,7 +31164,8 @@ fn configure_ecdsafail_submission_route() {
     // 257-78) and drops the apply phase to 1543 == the ROUND84 floor. Global peak
     // 1558 -> 1543. F_CUT only reseeds + grows the boundary comparator (+~6,384
     // avg-executed Toffoli, 1,688,703 -> 1,695,087); peak-neutral for any cut>=78.
-    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_BLOCKS", "3");
+    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_BLOCKS", "4");
+    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUSTOM4", "1");
     // PEAK-QUBIT CUT 1542 -> 1500 (-42q). Two co-binders dropped together:
     //  (1) ROUND84 Karatsuba square (z0=lo^2 / z2=hi^2 schoolbook squares parked a
     //      ~130-wide cuccaro_add_fast carry lane, and the Solinas mid_sub/sub_add's
@@ -31121,12 +31222,12 @@ fn configure_ecdsafail_submission_route() {
     // 399 T/qubit, far inside break-even. Score 1446 x 1,740,263 = 2,516,420,298.
     set_default_env("DIALOG_GCD_BODY_HOST_CIN", "1");
     set_default_env("DIALOG_GCD_LATE_BORROW_UV_HIGH", "1");
-    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT", "116");
-    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT2", "140");
+    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT", "56");
+    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT2", "112");
+    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT3", "168");
     // Active-396 island: compare_bits=58 + apply_clean=21 + schedule margin=8
     // validates 0/0/0 over all 9024 shots at 1438q x 1,736,773 T.
-    // compare56 clean island (1-D reroll sweep on the 1411q base, post_sub=0).
-    set_default_env("DIALOG_REROLL", "444");
+    set_default_env("DIALOG_REROLL", "171");
     set_default_env("DIALOG_POST_SUB_REROLL", "0");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
