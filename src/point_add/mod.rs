@@ -25571,6 +25571,60 @@ fn dialog_gcd_compressed_sidecar_block(compressed_log: &[QubitId], step: usize) 
     &compressed_log[start..start + DIALOG_GCD_HIGH_TAIL_ALIAS_BLOCK_BITS]
 }
 
+fn dialog_gcd_host_reverse_raw_block_enabled() -> bool {
+    std::env::var("DIALOG_GCD_HOST_REVERSE_RAW_BLOCK")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
+fn dialog_gcd_reverse_raw_block_host<'a>(
+    u: &'a [QubitId],
+    compressed_log: &'a [QubitId],
+    block: usize,
+) -> Option<&'a [QubitId]> {
+    if !dialog_gcd_host_reverse_raw_block_enabled() {
+        return None;
+    }
+    let (start, _) = dialog_gcd_compressed_sidecar_block_step_range(block);
+    let active_width = dialog_gcd_tobitvector_active_width(start);
+    let want = 2 * active_width - 1;
+    if u.len().saturating_sub(active_width) >= want + 2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE {
+        return Some(&u[u.len() - 2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE..]);
+    }
+    let future_start = (block + 1) * DIALOG_GCD_HIGH_TAIL_ALIAS_BLOCK_BITS;
+    let future = compressed_log.get(future_start..)?;
+    if future.len() >= want + 2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE {
+        Some(&future[future.len() - 2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE..])
+    } else {
+        None
+    }
+}
+
+fn dialog_gcd_forward_raw_block_host<'a>(
+    u: &'a [QubitId],
+    compressed_log: &'a [QubitId],
+    block: usize,
+) -> Option<&'a [QubitId]> {
+    if !dialog_gcd_host_reverse_raw_block_enabled() {
+        return None;
+    }
+    let (start, _) = dialog_gcd_compressed_sidecar_block_step_range(block);
+    let active_width = dialog_gcd_tobitvector_active_width(start);
+    let want = 2 * active_width - 1;
+    let future_start = (block + 1) * DIALOG_GCD_HIGH_TAIL_ALIAS_BLOCK_BITS;
+    if let Some(future) = compressed_log.get(future_start..) {
+        if future.len() >= want + 2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE {
+            return Some(&future[future.len() - 2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE..]);
+        }
+    }
+    if u.len().saturating_sub(active_width) >= want + 2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE {
+        Some(&u[u.len() - 2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE..])
+    } else {
+        None
+    }
+}
+
 fn dialog_gcd_compressed_sidecar_future_carry_slice(
     compressed_log: &[QubitId],
     step: usize,
@@ -25640,11 +25694,26 @@ fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps_block_lifecycle(
 ) {
     assert_eq!(u.len(), N);
     assert_eq!(v.len(), N);
-    assert_eq!(raw_block.len(), 2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE);
+    assert!(
+        raw_block.is_empty() || raw_block.len() == 2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE
+    );
     assert!(compressed_log.len() >= dialog_gcd_compressed_sidecar_bits());
 
     for block in 0..dialog_gcd_compressed_sidecar_blocks() {
         let (start, end) = dialog_gcd_compressed_sidecar_block_step_range(block);
+        let hosted_raw_block = dialog_gcd_forward_raw_block_host(u, compressed_log, block);
+        let owned_raw_block = if dialog_gcd_host_reverse_raw_block_enabled() && hosted_raw_block.is_none() {
+            b.alloc_qubits(2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE)
+        } else {
+            Vec::new()
+        };
+        let raw_block = hosted_raw_block.unwrap_or_else(|| {
+            if owned_raw_block.is_empty() {
+                raw_block
+            } else {
+                &owned_raw_block
+            }
+        });
         for step in start..end {
             let slot = step - start;
             let b0 = raw_block[2 * slot];
@@ -25726,6 +25795,9 @@ fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps_block_lifecycle(
         for i in 0..DIALOG_GCD_HIGH_TAIL_ALIAS_BLOCK_BITS {
             b.swap(raw_block[i], compressed_block[i]);
         }
+        if !owned_raw_block.is_empty() {
+            b.free_vec(&owned_raw_block);
+        }
     }
 }
 
@@ -25738,12 +25810,27 @@ fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps_reverse_block_lifecycle(
 ) {
     assert_eq!(u.len(), N);
     assert_eq!(v.len(), N);
-    assert_eq!(raw_block.len(), 2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE);
+    assert!(
+        raw_block.is_empty() || raw_block.len() == 2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE
+    );
     assert!(compressed_log.len() >= dialog_gcd_compressed_sidecar_bits());
 
     for block in (0..dialog_gcd_compressed_sidecar_blocks()).rev() {
         let (start, end) = dialog_gcd_compressed_sidecar_block_step_range(block);
         let compressed_block = dialog_gcd_compressed_sidecar_block(compressed_log, start);
+        let hosted_raw_block = dialog_gcd_reverse_raw_block_host(u, compressed_log, block);
+        let owned_raw_block = if dialog_gcd_host_reverse_raw_block_enabled() && hosted_raw_block.is_none() {
+            b.alloc_qubits(2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE)
+        } else {
+            Vec::new()
+        };
+        let raw_block = hosted_raw_block.unwrap_or_else(|| {
+            if owned_raw_block.is_empty() {
+                raw_block
+            } else {
+                &owned_raw_block
+            }
+        });
 
         b.set_phase("dialog_gcd_compressed_block_tobitvector_reverse_decompress_block");
         for i in 0..DIALOG_GCD_HIGH_TAIL_ALIAS_BLOCK_BITS {
@@ -25819,6 +25906,9 @@ fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps_reverse_block_lifecycle(
                 b.free(cmp);
             }
             b.cx(v[0], b0);
+        }
+        if !owned_raw_block.is_empty() {
+            b.free_vec(&owned_raw_block);
         }
     }
 }
@@ -26175,7 +26265,11 @@ fn emit_dialog_gcd_compressed_sidecar_ipmul_block_lifecycle(
     assert_eq!(target.len(), N);
 
     let compressed_log = b.alloc_qubits(dialog_gcd_compressed_sidecar_bits());
-    let raw_block = b.alloc_qubits(2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE);
+    let raw_block = if dialog_gcd_host_reverse_raw_block_enabled() {
+        Vec::new()
+    } else {
+        b.alloc_qubits(2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE)
+    };
     let u = b.alloc_qubits(N);
     b.set_phase("dialog_gcd_compressed_block_ipmul_load_p");
     for i in 0..N {
@@ -26199,14 +26293,22 @@ fn emit_dialog_gcd_compressed_sidecar_ipmul_block_lifecycle(
         b.free_vec(&u);
 
         b.set_phase("dialog_gcd_compressed_block_ipmul_apply_bitvector_reuse_factor_zero");
+        let apply_raw_block = if dialog_gcd_host_reverse_raw_block_enabled() {
+            b.alloc_qubits(2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE)
+        } else {
+            Vec::new()
+        };
         emit_dialog_gcd_compressed_sidecar_apply_bitvector_block_lifecycle(
             b,
             &compressed_log,
             target,
             factor,
             p,
-            &raw_block,
+            if apply_raw_block.is_empty() { &raw_block } else { &apply_raw_block },
         );
+        if !apply_raw_block.is_empty() {
+            b.free_vec(&apply_raw_block);
+        }
 
         if dialog_gcd_raw_ipmul_clear_p_residual_enabled() {
             b.set_phase("dialog_gcd_compressed_block_ipmul_clear_p_residual_source_lane");
@@ -26243,7 +26345,9 @@ fn emit_dialog_gcd_compressed_sidecar_ipmul_block_lifecycle(
             }
         }
         b.free_vec(&u);
-        b.free_vec(&raw_block);
+        if !raw_block.is_empty() {
+            b.free_vec(&raw_block);
+        }
         b.free_vec(&compressed_log);
         return;
     }
@@ -26432,7 +26536,11 @@ fn emit_dialog_gcd_compressed_sidecar_quotient_block_lifecycle(
     assert_eq!(target.len(), N);
 
     let compressed_log = b.alloc_qubits(dialog_gcd_compressed_sidecar_bits());
-    let raw_block = b.alloc_qubits(2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE);
+    let raw_block = if dialog_gcd_host_reverse_raw_block_enabled() {
+        Vec::new()
+    } else {
+        b.alloc_qubits(2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE)
+    };
     let u = b.alloc_qubits(N);
     b.set_phase("dialog_gcd_compressed_block_quotient_load_p");
     for i in 0..N {
@@ -26456,14 +26564,22 @@ fn emit_dialog_gcd_compressed_sidecar_quotient_block_lifecycle(
         b.free_vec(&u);
 
         b.set_phase("dialog_gcd_compressed_block_quotient_apply_reverse_reuse_factor_zero");
+        let apply_raw_block = if dialog_gcd_host_reverse_raw_block_enabled() {
+            b.alloc_qubits(2 * DIALOG_GCD_HIGH_TAIL_ALIAS_GROUP_SIZE)
+        } else {
+            Vec::new()
+        };
         emit_dialog_gcd_compressed_sidecar_apply_bitvector_reverse_exact_block_lifecycle(
             b,
             &compressed_log,
             factor,
             target,
             p,
-            &raw_block,
+            if apply_raw_block.is_empty() { &raw_block } else { &apply_raw_block },
         );
+        if !apply_raw_block.is_empty() {
+            b.free_vec(&apply_raw_block);
+        }
 
         b.set_phase("dialog_gcd_compressed_block_quotient_swap_quotient_into_target");
         for i in 0..N {
@@ -26491,7 +26607,9 @@ fn emit_dialog_gcd_compressed_sidecar_quotient_block_lifecycle(
             }
         }
         b.free_vec(&u);
-        b.free_vec(&raw_block);
+        if !raw_block.is_empty() {
+            b.free_vec(&raw_block);
+        }
         b.free_vec(&compressed_log);
         return;
     }
@@ -30032,6 +30150,7 @@ fn configure_ecdsafail_submission_route() {
     set_default_env("SKIP_ALT_SEED_CHECKS", "1");
     set_default_env("DIALOG_GCD_COMPRESSED_SIDECAR_LOG", "1");
     set_default_env("DIALOG_GCD_COMPRESSED_BLOCK_LIFECYCLE", "1");
+    set_default_env("DIALOG_GCD_HOST_REVERSE_RAW_BLOCK", "1");
     set_default_env("DIALOG_GCD_PA9024_COMPARE_SCHEDULE", "1");
     // PA9024 compare-schedule margin retuned with ACTIVE_ITERATIONS=396 and
     // APPLY_CLEAN_COMPARE_BITS=21. The wider margin gives back a little Toffoli
@@ -30193,12 +30312,12 @@ fn configure_ecdsafail_submission_route() {
     // 399 T/qubit, far inside break-even. Score 1446 x 1,740,263 = 2,516,420,298.
     set_default_env("DIALOG_GCD_BODY_HOST_CIN", "1");
     set_default_env("DIALOG_GCD_LATE_BORROW_UV_HIGH", "1");
-    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT", "124");
-    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT2", "130");
+    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT", "123");
+    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT2", "133");
     // Active-396 island: compare_bits=58 + apply_clean=21 + schedule margin=8
     // validates 0/0/0 over all 9024 shots at 1438q x 1,736,773 T.
-    set_default_env("DIALOG_REROLL", "366567");
-    set_default_env("DIALOG_POST_SUB_REROLL", "59314");
+    set_default_env("DIALOG_REROLL", "164");
+    set_default_env("DIALOG_POST_SUB_REROLL", "100");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
     // separate cmp qubit and recomputing the comparator for uncompute. Pure
