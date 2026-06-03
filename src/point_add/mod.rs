@@ -29934,7 +29934,9 @@ fn configure_ecdsafail_submission_route() {
     // Branch comparator width tightened 59 -> 58 (−952 executed Toffoli),
     // stacked on the 1446-peak base + ACTIVE_ITERATIONS=397 via the reroll-37/1
     // island documented below.
-    set_default_env("DIALOG_GCD_COMPARE_BITS", "58");
+    // Branch comparator 58 -> 57: -1,064 executed Toffoli, peak-neutral at 1434q,
+    // stacked on the active395 base. Clean island at REROLL=4959 / POST_SUB=5983.
+    set_default_env("DIALOG_GCD_COMPARE_BITS", "57");
     set_default_env("DIALOG_GCD_APPLY_CLEAN_COMPARE_BITS", "20");
     set_default_env("DIALOG_GCD_RAW_PA", "1");
     // 399 -> 396. The binary-GCD transcript still converges on the reachable
@@ -30070,8 +30072,8 @@ fn configure_ecdsafail_submission_route() {
     set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT2", "130");
     // Active-396 island: compare_bits=58 + apply_clean=21 + schedule margin=8
     // validates 0/0/0 over all 9024 shots at 1438q x 1,736,773 T.
-    set_default_env("DIALOG_REROLL", "745048");
-    set_default_env("DIALOG_POST_SUB_REROLL", "679742");
+    set_default_env("DIALOG_REROLL", "4959");
+    set_default_env("DIALOG_POST_SUB_REROLL", "5983");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
     // separate cmp qubit and recomputing the comparator for uncompute. Pure
