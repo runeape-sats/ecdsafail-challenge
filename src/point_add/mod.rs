@@ -1792,6 +1792,99 @@ fn cuccaro_sub_fast_low_to_ext(b: &mut B, a: &[QubitId], acc_ext: &[QubitId], c_
     b.free_vec(&carries);
 }
 
+/// Borrowed-carry form of [`cuccaro_add_fast_low_to_ext`].  The source has no
+/// materialized high-zero pad lane: `acc_ext` is one bit wider than `a`, and
+/// the caller supplies `a.len()` clean, pairwise-disjoint carry lanes.
+fn cuccaro_add_fast_low_to_ext_borrowed_carries(
+    b: &mut B,
+    a: &[QubitId],
+    acc_ext: &[QubitId],
+    c_in: QubitId,
+    carries: &[QubitId],
+) {
+    let n = a.len();
+    assert_eq!(acc_ext.len(), n + 1);
+    if n == 0 {
+        b.cx(c_in, acc_ext[0]);
+        return;
+    }
+    assert!(carries.len() >= n);
+
+    b.cx(a[0], acc_ext[0]);
+    b.cx(a[0], c_in);
+    b.ccx(c_in, acc_ext[0], carries[0]);
+    b.cx(carries[0], a[0]);
+    for i in 1..n {
+        b.cx(a[i], acc_ext[i]);
+        b.cx(a[i], a[i - 1]);
+        b.ccx(a[i - 1], acc_ext[i], carries[i]);
+        b.cx(carries[i], a[i]);
+    }
+
+    b.cx(a[n - 1], acc_ext[n]);
+
+    for i in (1..n).rev() {
+        b.cx(carries[i], a[i]);
+        let m = b.alloc_bit();
+        b.hmr(carries[i], m);
+        b.cz_if(a[i - 1], acc_ext[i], m);
+        b.cx(a[i], a[i - 1]);
+        b.cx(a[i - 1], acc_ext[i]);
+    }
+    b.cx(carries[0], a[0]);
+    let m0 = b.alloc_bit();
+    b.hmr(carries[0], m0);
+    b.cz_if(c_in, acc_ext[0], m0);
+    b.cx(a[0], c_in);
+    b.cx(c_in, acc_ext[0]);
+}
+
+/// Borrowed-carry inverse of
+/// [`cuccaro_add_fast_low_to_ext_borrowed_carries`].
+fn cuccaro_sub_fast_low_to_ext_borrowed_carries(
+    b: &mut B,
+    a: &[QubitId],
+    acc_ext: &[QubitId],
+    c_in: QubitId,
+    carries: &[QubitId],
+) {
+    let n = a.len();
+    assert_eq!(acc_ext.len(), n + 1);
+    if n == 0 {
+        b.cx(c_in, acc_ext[0]);
+        return;
+    }
+    assert!(carries.len() >= n);
+
+    b.cx(c_in, acc_ext[0]);
+    b.cx(a[0], c_in);
+    b.ccx(c_in, acc_ext[0], carries[0]);
+    b.cx(carries[0], a[0]);
+    for i in 1..n {
+        b.cx(a[i - 1], acc_ext[i]);
+        b.cx(a[i], a[i - 1]);
+        b.ccx(a[i - 1], acc_ext[i], carries[i]);
+        b.cx(carries[i], a[i]);
+    }
+
+    b.cx(a[n - 1], acc_ext[n]);
+
+    for i in (1..n).rev() {
+        b.cx(carries[i], a[i]);
+        let m = b.alloc_bit();
+        b.hmr(carries[i], m);
+        b.cz_if(a[i - 1], acc_ext[i], m);
+        b.cx(a[i], a[i - 1]);
+        b.cx(a[i], acc_ext[i]);
+    }
+    b.cx(carries[0], a[0]);
+    let m0 = b.alloc_bit();
+    b.hmr(carries[0], m0);
+    b.cz_if(c_in, acc_ext[0], m0);
+    b.cx(a[0], c_in);
+    b.cx(a[0], acc_ext[0]);
+}
+
 /// Windowed measured add: `acc += a + c_in (mod 2^n)`, reusing the proven
 /// `cuccaro_add_fast` block-wise but threading the inter-block carry through a
 /// 1-bit register extension. Only ~n/blocks measured-carry ancillae are live at
@@ -5988,6 +6081,9 @@ fn schoolbook_square_symmetric_lowq_inverse(b: &mut B, x: &[QubitId], tmp_ext: &
 fn schoolbook_square_symmetric_hosted(b: &mut B, x: &[QubitId], tmp_ext: &[QubitId], host: &[QubitId]) {
     let n = x.len();
     debug_assert_eq!(tmp_ext.len(), 2 * n);
+    if square_selfhost_safe_lane_reuse_enabled() {
+        assert_qubit_slices_disjoint(&[x, tmp_ext, host]);
+    }
     for i in 0..n {
         let width = if i == n - 1 { 1 } else { n - i + 1 };
         let num_cross = if i + 1 < n { n - i - 1 } else { 0 };
@@ -5996,14 +6092,33 @@ fn schoolbook_square_symmetric_hosted(b: &mut B, x: &[QubitId], tmp_ext: &[Qubit
         for k in 0..num_cross {
             b.ccx(x[i], x[i + 1 + k], row[k + 2]);
         }
-        let pad = b.alloc_qubit();
-        let mut row_padded = row.clone();
-        row_padded.push(pad);
         let slice: Vec<QubitId> = tmp_ext[2 * i..2 * i + width + 1].to_vec();
-        let c_in = b.alloc_qubit();
-        cuccaro_add_fast_borrowed_carries(b, &row_padded, &slice, c_in, &host[..row_padded.len() - 1]);
-        b.free(c_in);
-        b.free(pad);
+        if square_selfhost_safe_lane_reuse_enabled() {
+            // The z2 sibling host is clean and disjoint from x and z0.  It has
+            // ample room for both the width carry lanes and one clean c_in.
+            assert!(host.len() > width);
+            cuccaro_add_fast_low_to_ext_borrowed_carries(
+                b,
+                &row,
+                &slice,
+                host[width],
+                &host[..width],
+            );
+        } else {
+            let pad = b.alloc_qubit();
+            let mut row_padded = row.clone();
+            row_padded.push(pad);
+            let c_in = b.alloc_qubit();
+            cuccaro_add_fast_borrowed_carries(
+                b,
+                &row_padded,
+                &slice,
+                c_in,
+                &host[..row_padded.len() - 1],
+            );
+            b.free(c_in);
+            b.free(pad);
+        }
         b.cx(x[i], row[0]);
         for k in 0..num_cross {
             let m = b.alloc_bit();
@@ -6021,6 +6136,9 @@ fn schoolbook_square_symmetric_hosted_inverse(
     host: &[QubitId],
 ) {
     let n = x.len();
+    if square_selfhost_safe_lane_reuse_enabled() {
+        assert_qubit_slices_disjoint(&[x, tmp_ext, host]);
+    }
     for i in (0..n).rev() {
         let width = if i == n - 1 { 1 } else { n - i + 1 };
         let num_cross = if i + 1 < n { n - i - 1 } else { 0 };
@@ -6029,14 +6147,31 @@ fn schoolbook_square_symmetric_hosted_inverse(
         for k in 0..num_cross {
             b.ccx(x[i], x[i + 1 + k], row[k + 2]);
         }
-        let pad = b.alloc_qubit();
-        let mut row_padded = row.clone();
-        row_padded.push(pad);
         let slice: Vec<QubitId> = tmp_ext[2 * i..2 * i + width + 1].to_vec();
-        let c_in = b.alloc_qubit();
-        cuccaro_sub_fast_borrowed_carries(b, &row_padded, &slice, c_in, &host[..row_padded.len() - 1]);
-        b.free(c_in);
-        b.free(pad);
+        if square_selfhost_safe_lane_reuse_enabled() {
+            assert!(host.len() > width);
+            cuccaro_sub_fast_low_to_ext_borrowed_carries(
+                b,
+                &row,
+                &slice,
+                host[width],
+                &host[..width],
+            );
+        } else {
+            let pad = b.alloc_qubit();
+            let mut row_padded = row.clone();
+            row_padded.push(pad);
+            let c_in = b.alloc_qubit();
+            cuccaro_sub_fast_borrowed_carries(
+                b,
+                &row_padded,
+                &slice,
+                c_in,
+                &host[..row_padded.len() - 1],
+            );
+            b.free(c_in);
+            b.free(pad);
+        }
         b.cx(x[i], row[0]);
         for k in 0..num_cross {
             let m = b.alloc_bit();
@@ -6044,6 +6179,27 @@ fn schoolbook_square_symmetric_hosted_inverse(
             b.cz_if(x[i], x[i + 1 + k], m);
         }
         b.free_vec(&row);
+    }
+}
+
+/// Experimental square-only reclaim.  This is deliberately opt-in: every lane
+/// borrowed by the prototype is either an untouched high tail of the square
+/// accumulator, a caller-proved square bit that is exactly zero, or a clean
+/// sibling square destination.  Dirty-but-idle data and operand aliases are not
+/// eligible.
+fn square_selfhost_safe_lane_reuse_enabled() -> bool {
+    std::env::var("SQUARE_SELFHOST_SAFE_LANE_REUSE")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
+fn assert_qubit_slices_disjoint(slices: &[&[QubitId]]) {
+    let mut seen = std::collections::BTreeSet::new();
+    for slice in slices {
+        for &q in *slice {
+            assert!(seen.insert(q), "scratch lane q{} aliases an operand", q.0);
+        }
     }
 }
 
@@ -6057,10 +6213,30 @@ fn schoolbook_square_symmetric_hosted_inverse(
 /// `schoolbook_square_symmetric_hosted` this needs no sibling clean register,
 /// so it applies where the sibling slice is occupied (the Karatsuba z2 square).
 /// Peak rises only by the global remainder (<=3); Toffoli drops by the whole
-/// UMA-uncompute. The borrowed carries are returned clean by the HMR uncompute.
+/// UMA-uncompute. Under `SQUARE_SELFHOST_SAFE_LANE_REUSE=1`, the source-high
+/// zero is represented structurally (no allocated `pad`) and an optional
+/// caller-proved clean supplement is consumed before the global remainder. The
+/// borrowed carries are returned clean by the HMR uncompute.
 fn schoolbook_square_symmetric_lowq_selfhosted(b: &mut B, x: &[QubitId], tmp_ext: &[QubitId]) {
+    schoolbook_square_symmetric_lowq_selfhosted_with_clean_supplement(b, x, tmp_ext, &[]);
+}
+
+fn schoolbook_square_symmetric_lowq_selfhosted_with_clean_supplement(
+    b: &mut B,
+    x: &[QubitId],
+    tmp_ext: &[QubitId],
+    clean_supplement: &[QubitId],
+) {
     let n = x.len();
     debug_assert_eq!(tmp_ext.len(), 2 * n);
+    let safe_reuse = square_selfhost_safe_lane_reuse_enabled();
+    if safe_reuse {
+        assert_qubit_slices_disjoint(&[x, tmp_ext, clean_supplement]);
+    }
+    let gate_prefix_rows = std::env::var("SQUARE_SELFHOST_GATE_PREFIX_ROWS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
     for i in 0..n {
         let width = if i == n - 1 { 1 } else { n - i + 1 };
         let num_cross = if i + 1 < n { n - i - 1 } else { 0 };
@@ -6069,23 +6245,47 @@ fn schoolbook_square_symmetric_lowq_selfhosted(b: &mut B, x: &[QubitId], tmp_ext
         for k in 0..num_cross {
             b.ccx(x[i], x[i + 1 + k], row[k + 2]);
         }
-        let pad = b.alloc_qubit();
-        let mut row_padded = row.clone();
-        row_padded.push(pad);
         let hi = 2 * i + width + 1;
         let slice: Vec<QubitId> = tmp_ext[2 * i..hi].to_vec();
-        let need = row_padded.len() - 1;
-        let avail = tmp_ext.len() - hi;
-        let from_tmp = need.min(avail);
-        let from_global = need - from_tmp;
-        let gpool = b.alloc_qubits(from_global);
-        let mut carries: Vec<QubitId> = tmp_ext[hi..hi + from_tmp].to_vec();
-        carries.extend_from_slice(&gpool);
-        let c_in = b.alloc_qubit();
-        cuccaro_add_fast_borrowed_carries(b, &row_padded, &slice, c_in, &carries);
-        b.free(c_in);
-        b.free_vec(&gpool);
-        b.free(pad);
+        if i < gate_prefix_rows {
+            let pad = b.alloc_qubit();
+            let mut row_padded = row.clone();
+            row_padded.push(pad);
+            let c_in = b.alloc_qubit();
+            cuccaro_add(b, &row_padded, &slice, c_in);
+            b.free(c_in);
+            b.free(pad);
+        } else if safe_reuse {
+            let c_in = b.alloc_qubit();
+            let need = row.len();
+            let avail = tmp_ext.len() - hi;
+            let from_tmp = need.min(avail);
+            let from_supplement = (need - from_tmp).min(clean_supplement.len());
+            let from_global = need - from_tmp - from_supplement;
+            let gpool = b.alloc_qubits(from_global);
+            let mut carries: Vec<QubitId> = tmp_ext[hi..hi + from_tmp].to_vec();
+            carries.extend_from_slice(&clean_supplement[..from_supplement]);
+            carries.extend_from_slice(&gpool);
+            cuccaro_add_fast_low_to_ext_borrowed_carries(b, &row, &slice, c_in, &carries);
+            b.free(c_in);
+            b.free_vec(&gpool);
+        } else {
+            let pad = b.alloc_qubit();
+            let mut row_padded = row.clone();
+            row_padded.push(pad);
+            let c_in = b.alloc_qubit();
+            let need = row_padded.len() - 1;
+            let avail = tmp_ext.len() - hi;
+            let from_tmp = need.min(avail);
+            let from_global = need - from_tmp;
+            let gpool = b.alloc_qubits(from_global);
+            let mut carries: Vec<QubitId> = tmp_ext[hi..hi + from_tmp].to_vec();
+            carries.extend_from_slice(&gpool);
+            cuccaro_add_fast_borrowed_carries(b, &row_padded, &slice, c_in, &carries);
+            b.free(c_in);
+            b.free_vec(&gpool);
+            b.free(pad);
+        }
         b.cx(x[i], row[0]);
         for k in 0..num_cross {
             let m = b.alloc_bit();
@@ -6097,8 +6297,25 @@ fn schoolbook_square_symmetric_lowq_selfhosted(b: &mut B, x: &[QubitId], tmp_ext
 }
 
 fn schoolbook_square_symmetric_lowq_selfhosted_inverse(b: &mut B, x: &[QubitId], tmp_ext: &[QubitId]) {
+    schoolbook_square_symmetric_lowq_selfhosted_inverse_with_clean_supplement(b, x, tmp_ext, &[]);
+}
+
+fn schoolbook_square_symmetric_lowq_selfhosted_inverse_with_clean_supplement(
+    b: &mut B,
+    x: &[QubitId],
+    tmp_ext: &[QubitId],
+    clean_supplement: &[QubitId],
+) {
     let n = x.len();
     debug_assert_eq!(tmp_ext.len(), 2 * n);
+    let safe_reuse = square_selfhost_safe_lane_reuse_enabled();
+    if safe_reuse {
+        assert_qubit_slices_disjoint(&[x, tmp_ext, clean_supplement]);
+    }
+    let gate_prefix_rows = std::env::var("SQUARE_SELFHOST_GATE_PREFIX_ROWS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
     for i in (0..n).rev() {
         let width = if i == n - 1 { 1 } else { n - i + 1 };
         let num_cross = if i + 1 < n { n - i - 1 } else { 0 };
@@ -6107,23 +6324,47 @@ fn schoolbook_square_symmetric_lowq_selfhosted_inverse(b: &mut B, x: &[QubitId],
         for k in 0..num_cross {
             b.ccx(x[i], x[i + 1 + k], row[k + 2]);
         }
-        let pad = b.alloc_qubit();
-        let mut row_padded = row.clone();
-        row_padded.push(pad);
         let hi = 2 * i + width + 1;
         let slice: Vec<QubitId> = tmp_ext[2 * i..hi].to_vec();
-        let need = row_padded.len() - 1;
-        let avail = tmp_ext.len() - hi;
-        let from_tmp = need.min(avail);
-        let from_global = need - from_tmp;
-        let gpool = b.alloc_qubits(from_global);
-        let mut carries: Vec<QubitId> = tmp_ext[hi..hi + from_tmp].to_vec();
-        carries.extend_from_slice(&gpool);
-        let c_in = b.alloc_qubit();
-        cuccaro_sub_fast_borrowed_carries(b, &row_padded, &slice, c_in, &carries);
-        b.free(c_in);
-        b.free_vec(&gpool);
-        b.free(pad);
+        if i < gate_prefix_rows {
+            let pad = b.alloc_qubit();
+            let mut row_padded = row.clone();
+            row_padded.push(pad);
+            let c_in = b.alloc_qubit();
+            cuccaro_sub(b, &row_padded, &slice, c_in);
+            b.free(c_in);
+            b.free(pad);
+        } else if safe_reuse {
+            let c_in = b.alloc_qubit();
+            let need = row.len();
+            let avail = tmp_ext.len() - hi;
+            let from_tmp = need.min(avail);
+            let from_supplement = (need - from_tmp).min(clean_supplement.len());
+            let from_global = need - from_tmp - from_supplement;
+            let gpool = b.alloc_qubits(from_global);
+            let mut carries: Vec<QubitId> = tmp_ext[hi..hi + from_tmp].to_vec();
+            carries.extend_from_slice(&clean_supplement[..from_supplement]);
+            carries.extend_from_slice(&gpool);
+            cuccaro_sub_fast_low_to_ext_borrowed_carries(b, &row, &slice, c_in, &carries);
+            b.free(c_in);
+            b.free_vec(&gpool);
+        } else {
+            let pad = b.alloc_qubit();
+            let mut row_padded = row.clone();
+            row_padded.push(pad);
+            let c_in = b.alloc_qubit();
+            let need = row_padded.len() - 1;
+            let avail = tmp_ext.len() - hi;
+            let from_tmp = need.min(avail);
+            let from_global = need - from_tmp;
+            let gpool = b.alloc_qubits(from_global);
+            let mut carries: Vec<QubitId> = tmp_ext[hi..hi + from_tmp].to_vec();
+            carries.extend_from_slice(&gpool);
+            cuccaro_sub_fast_borrowed_carries(b, &row_padded, &slice, c_in, &carries);
+            b.free(c_in);
+            b.free_vec(&gpool);
+            b.free(pad);
+        }
         b.cx(x[i], row[0]);
         for k in 0..num_cross {
             let m = b.alloc_bit();
@@ -6503,7 +6744,21 @@ fn squaring_sub_from_acc_karatsuba(b: &mut B, acc: &[QubitId], x: &[QubitId], p:
         let slice: Vec<QubitId> = tmp_ext[2 * h..4 * h].to_vec();
         if z02_lowq {
             if kara_z2_selfhost_enabled() {
-                schoolbook_square_symmetric_lowq_selfhosted(b, &x_hi, &slice);
+                if square_selfhost_safe_lane_reuse_enabled() {
+                    // z1=(lo+hi)^2 and z0=lo^2 are exact integer squares here.
+                    // Every square is 0 or 1 mod 4, so bit 1 of each register is
+                    // provably |0>.  Both lanes are disjoint from x_hi, z2, and
+                    // z2's own untouched-tail carry lanes.
+                    let clean_square_bits = [z1_reg[1], tmp_ext[1]];
+                    schoolbook_square_symmetric_lowq_selfhosted_with_clean_supplement(
+                        b,
+                        &x_hi,
+                        &slice,
+                        &clean_square_bits,
+                    );
+                } else {
+                    schoolbook_square_symmetric_lowq_selfhosted(b, &x_hi, &slice);
+                }
             } else {
                 schoolbook_square_symmetric_lowq(b, &x_hi, &slice);
             }
@@ -6692,7 +6947,20 @@ fn squaring_sub_from_acc_karatsuba(b: &mut B, acc: &[QubitId], x: &[QubitId], p:
         let slice: Vec<QubitId> = tmp_ext[2 * h..4 * h].to_vec();
         if z02_lowq {
             if kara_z2_selfhost_enabled() {
-                schoolbook_square_symmetric_lowq_selfhosted_inverse(b, &x_hi, &slice);
+                if square_selfhost_safe_lane_reuse_enabled() {
+                    // Inverse-combine restored the exact z1 and z0 squares
+                    // before this block, so their square-bit-1 lanes are clean
+                    // scratch again (the mirror of the forward z2 proof).
+                    let clean_square_bits = [z1_reg[1], tmp_ext[1]];
+                    schoolbook_square_symmetric_lowq_selfhosted_inverse_with_clean_supplement(
+                        b,
+                        &x_hi,
+                        &slice,
+                        &clean_square_bits,
+                    );
+                } else {
+                    schoolbook_square_symmetric_lowq_selfhosted_inverse(b, &x_hi, &slice);
+                }
             } else {
                 schoolbook_square_symmetric_lowq_inverse(b, &x_hi, &slice);
             }
@@ -30579,6 +30847,7 @@ fn configure_ecdsafail_submission_route() {
     set_default_env("DIALOG_GCD_COMPRESSED_LOG_U_HIGH_RUNWAY", "1");
     set_default_env("DIALOG_GCD_COMPRESSED_LOG_U_HIGH_RUNWAY_BLOCKS", "3");
     set_default_env("DIALOG_GCD_APPLY_REPLAY_SWAP_HOST", "1");
+    set_default_env("SQUARE_SELFHOST_SAFE_LANE_REUSE", "1");
     set_default_env("DIALOG_GCD_PA9024_COMPARE_SCHEDULE", "1");
     // PA9024 compare-schedule margin retuned with ACTIVE_ITERATIONS=396 and
     // APPLY_CLEAN_COMPARE_BITS=21. The wider margin gives back a little Toffoli
@@ -30612,7 +30881,7 @@ fn configure_ecdsafail_submission_route() {
     set_default_env("DIALOG_GCD_RAW_PA", "1");
     // 399 -> 396. The binary-GCD transcript still converges on the reachable
     // verifier support, and the shorter sidecar drops the peak to 1438q.
-    set_default_env("DIALOG_GCD_ACTIVE_ITERATIONS", "395");
+    set_default_env("DIALOG_GCD_ACTIVE_ITERATIONS", "396");
     set_default_env("DIALOG_GCD_RAW_IPMUL_TERMINAL_REUSE", "1");
     set_default_env("DIALOG_GCD_RAW_IPMUL_CLEAR_P_RESIDUAL", "1");
     set_default_env("DIALOG_GCD_RAW_QUOTIENT_TERMINAL_REUSE", "1");
@@ -30740,12 +31009,12 @@ fn configure_ecdsafail_submission_route() {
     // 399 T/qubit, far inside break-even. Score 1446 x 1,740,263 = 2,516,420,298.
     set_default_env("DIALOG_GCD_BODY_HOST_CIN", "1");
     set_default_env("DIALOG_GCD_LATE_BORROW_UV_HIGH", "1");
-    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT", "118");
+    set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT", "116");
     set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT2", "140");
     // Active-396 island: compare_bits=58 + apply_clean=21 + schedule margin=8
     // validates 0/0/0 over all 9024 shots at 1438q x 1,736,773 T.
-    set_default_env("DIALOG_REROLL", "109365");
-    set_default_env("DIALOG_POST_SUB_REROLL", "93828");
+    set_default_env("DIALOG_REROLL", "109");
+    set_default_env("DIALOG_POST_SUB_REROLL", "100");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
     // separate cmp qubit and recomputing the comparator for uncompute. Pure
