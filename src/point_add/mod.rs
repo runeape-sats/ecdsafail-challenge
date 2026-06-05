@@ -31673,7 +31673,10 @@ fn configure_ecdsafail_submission_route() {
     // TAIL_NONCE below. Validated 0/0/0 over all 9024 shots.
     // Final-window W2 spends two branch-comparator bits back for a much denser
     // clean island while retaining a lower score than the current frontier.
-    set_default_env("DIALOG_GCD_COMPARE_BITS", "47");
+    // Re-tighten 47 -> 46 on the stacked W2 base (the branch comparator had slack
+    // restored by the structural island; it still decides every branch correctly
+    // on the reachable support at 46). Stacked under the nonce-20397 island below.
+    set_default_env("DIALOG_GCD_COMPARE_BITS", "46");
     // The apply clean comparator is also backed off to 20 for the same island.
     // Re-tighten 20 -> 19 on the W2 base (orthogonal apply-phase cmod-correction
     // comparator). Confirmed value-exact on the reachable support via the shared
@@ -31890,7 +31893,10 @@ fn configure_ecdsafail_submission_route() {
     // Re-rolled again for the stacked WIDTH_SLOPE=1011 + KAL_FOLD=22 +
     // APPLY_CLEAN_COMPARE_BITS=19 re-tightenings: nonce 18509 lands a clean island,
     // validated 0/0/0 over all 9024 shots at 1320q x 1,535,629 T = 2,027,030,280.
-    set_default_env("DIALOG_TAIL_NONCE", "18509");
+    // Re-rolled again for the stacked COMPARE_BITS 47->46 re-tightening: nonce
+    // 20397 lands a clean island, validated 0/0/0 over all 9024 shots at
+    // 1320q x 1,534,757 T = 2,025,879,240.
+    set_default_env("DIALOG_TAIL_NONCE", "20397");
     set_default_env("DIALOG_GCD_APPLY_FINAL_WINDOWED_FAST_BLOCKS", "2");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
