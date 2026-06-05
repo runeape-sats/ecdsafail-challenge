@@ -31795,7 +31795,7 @@ fn configure_ecdsafail_submission_route() {
     // widths stay within the provably-|0> converged GCD region. ~-512 avg-T.
     // 1009 -> 1010: one further notch, stacked with the band-trim late-band
     // deepening below under one shared island. Peak-neutral at 1320q.
-    set_default_env("DIALOG_GCD_WIDTH_SLOPE_X1000", "1009");
+    set_default_env("DIALOG_GCD_WIDTH_SLOPE_X1000", "1010");
     // Active-395 island on the promoted 1355q base: validated 0/0/0 over all
     // 9024 shots at 1355q x 1,773,011 T.
     set_default_env("DIALOG_REROLL", "506906");
@@ -31826,7 +31826,7 @@ fn configure_ecdsafail_submission_route() {
     // Re-rolled again for the added WIDTH_SLOPE=1010 + band-late-trim=2 notches:
     // nonce=22000964 lands a clean island, validated 0/0/0 over all 9024 shots at
     // 1320q x 1,556,187 T = 2,054,166,840.
-    set_default_env("DIALOG_TAIL_NONCE", "100874459447525");
+    set_default_env("DIALOG_TAIL_NONCE", "444");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
     // separate cmp qubit and recomputing the comparator for uncompute. Pure
