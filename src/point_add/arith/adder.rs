@@ -194,6 +194,82 @@ pub(crate) fn cuccaro_sub(b: &mut B, a: &[QubitId], acc: &[QubitId], c_in: Qubit
     inv_maj(b, c_in, acc[0], a[0]);
 }
 
+/// Clean (X/CX/CCX only, emit_inverse-safe) Cuccaro add of an n-bit register
+/// `a` into an (n+1)-bit accumulator `acc_ext`, capturing the carry-out into
+/// `acc_ext[n]`. `acc_ext` may hold any (n+1)-bit value on entry; `c_in` is a
+/// fresh ancilla at |0> that returns to |0>.
+///
+/// Unlike [`cuccaro_add`] (which discards the carry-out, omitting the top MAJ),
+/// this runs the *full* n-step MAJ sweep so the carry-out is materialized in
+/// `a[n-1]` after the sweep; we CX it into `acc_ext[n]`, then run the full UMA
+/// sweep to write the sum bits and restore `a` and `c_in`. This is the
+/// MAJ/UMA analogue of [`cuccaro_add_fast_low_to_ext`] (no measurement), so it
+/// is safe inside `emit_inverse` blocks. `a` is preserved.
+pub(crate) fn cuccaro_add_low_to_ext_clean(
+    b: &mut B,
+    a: &[QubitId],
+    acc_ext: &[QubitId],
+    c_in: QubitId,
+) {
+    let n = a.len();
+    assert_eq!(acc_ext.len(), n + 1);
+    if n == 0 {
+        // acc_ext[0] += c_in.
+        b.cx(c_in, acc_ext[0]);
+        return;
+    }
+
+    // Full forward MAJ sweep (bits 0..=n-1). After this, a[n-1] holds the
+    // carry-out of the whole addition.
+    maj(b, c_in, acc_ext[0], a[0]);
+    for i in 1..n {
+        maj(b, a[i - 1], acc_ext[i], a[i]);
+    }
+
+    // Carry-out into the extension bit.
+    b.cx(a[n - 1], acc_ext[n]);
+
+    // Full reverse UMA sweep: writes sum bits into acc_ext[0..n], restores a
+    // and c_in to their entry values.
+    for i in (1..n).rev() {
+        uma(b, a[i - 1], acc_ext[i], a[i]);
+    }
+    uma(b, c_in, acc_ext[0], a[0]);
+}
+
+/// Gate-level inverse of [`cuccaro_add_low_to_ext_clean`]: computes
+/// `acc_ext := acc_ext - (a + c_in)` capturing the borrow-out into
+/// `acc_ext[n]` (the same bit toggles, since add and subtract share the carry
+/// identity under the running ext bit). `a` is preserved; `c_in` clean in/out.
+pub(crate) fn cuccaro_sub_low_to_ext_clean(
+    b: &mut B,
+    a: &[QubitId],
+    acc_ext: &[QubitId],
+    c_in: QubitId,
+) {
+    let n = a.len();
+    assert_eq!(acc_ext.len(), n + 1);
+    if n == 0 {
+        b.cx(c_in, acc_ext[0]);
+        return;
+    }
+
+    // Inverse of the forward UMA sweep.
+    inv_uma(b, c_in, acc_ext[0], a[0]);
+    for i in 1..n {
+        inv_uma(b, a[i - 1], acc_ext[i], a[i]);
+    }
+
+    // Inverse of the carry-out write (CX is self-inverse).
+    b.cx(a[n - 1], acc_ext[n]);
+
+    // Inverse of the forward MAJ sweep.
+    for i in (1..n).rev() {
+        inv_maj(b, a[i - 1], acc_ext[i], a[i]);
+    }
+    inv_maj(b, c_in, acc_ext[0], a[0]);
+}
+
 
 pub(crate) fn load_const(b: &mut B, n: usize, c: U256) -> Vec<QubitId> {
     let qs = b.alloc_qubits(n);

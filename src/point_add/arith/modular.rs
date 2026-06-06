@@ -58,6 +58,70 @@ pub(crate) fn mod_sub_qq(b: &mut B, acc: &[QubitId], a: &[QubitId], p: U256) {
     emit_inverse(b, move |b| mod_add_qq(b, acc, &a_copy, p));
 }
 
+/// Ancilla-light copy of [`mod_add_qq`]. The only difference: the two Solinas
+/// constant corrections (`+c` in step 2 and the conditional `-c` in step 4) use
+/// the extended-carry clean adders, which load `c = 2^256 - p` into a 256-qubit
+/// register (= `acc_ext.len() - 1`) and fold the overflow into `acc_ext[n]` via a
+/// measurement-free Cuccaro. The stock `mod_add_qq` instead calls
+/// `add_nbit_const`/`csub_nbit_const`, which materialize a full 257-qubit loaded
+/// constant — the sole +1 transient that pins the round84 mid-sub peak at 1309.
+/// Replacing it with the 256-wide load drops that peak to 1308. Value- and
+/// phase-identical to `mod_add_qq`; clean (no `b.hmr`), so `emit_inverse`-safe.
+pub(crate) fn mod_add_qq_lowq(b: &mut B, acc: &[QubitId], a: &[QubitId], p: U256) {
+    let n = acc.len();
+    assert_eq!(n, a.len());
+    debug_assert_eq!(n, 256);
+
+    let (acc_ext, acc_ovf) = ext_reg(b, acc);
+    let (a_ext, a_ovf) = ext_reg(b, a);
+
+    // Step 1: (n+1)-bit add. acc_ext ∈ [0, 2p).
+    add_nbit_qq(b, &a_ext, &acc_ext);
+
+    // The addend `a_ext` is preserved by every step below (the only later read of
+    // it, the step-6 compare, touches a_ext[..n] only), so `a_ovf = a_ext[n]` is
+    // provably |0> and idle during the two const corrections (steps 2 & 4). Under
+    // the borrow flag we lend it to the Cuccaro as the carry-in slot, removing the
+    // sole fresh +1 transient that pins the round84-lowq mid-sub peak at 1308.
+    let borrow = if r84_lowq_cin_borrow_enabled() {
+        Some(a_ovf)
+    } else {
+        None
+    };
+
+    // Step 2: add c (ancilla-light: 256-wide const load + clean carry capture).
+    let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1));
+    add_nbit_const_extcarry_clean_with_cin(b, &acc_ext, c, borrow);
+
+    // Step 3: flag := acc_ovf (= top bit of sum + c).
+    let flag = b.alloc_qubit();
+    b.cx(acc_ovf, flag);
+
+    // Step 4: if flag=0 (no reduction needed), undo the add of c.
+    b.x(flag);
+    csub_nbit_const_extcarry_clean_with_cin(b, &acc_ext, c, flag, borrow);
+    b.x(flag);
+
+    // Step 5: if flag=1, clear the top bit (drops 2^n → yields sum - p).
+    b.cx(flag, acc_ovf);
+
+    // Step 6: uncompute flag (same identity as mod_add_qq).
+    cmp_lt_into(b, &acc_ext[..n], &a_ext[..n], flag);
+    b.free(flag);
+
+    unext_reg(b, a_ovf);
+    unext_reg(b, acc_ovf);
+    let _ = (acc_ext, a_ext);
+}
+
+/// Ancilla-light `acc := (acc - a) mod p`. Exact gate-level inverse of
+/// [`mod_add_qq_lowq`] (which is clean), so `emit_inverse` replays it as
+/// `(acc, a) ↦ (acc - a mod p, a)` with operand preserved and zero phase.
+pub(crate) fn mod_sub_qq_lowq(b: &mut B, acc: &[QubitId], a: &[QubitId], p: U256) {
+    let a_copy: Vec<QubitId> = a.to_vec();
+    emit_inverse(b, move |b| mod_add_qq_lowq(b, acc, &a_copy, p));
+}
+
 /// Fast `acc := (acc - a) mod p`. Direct sub + conditional add-p + flag
 /// uncompute via neg+cmp_lt+neg. All ops use measurement-based Cuccaro.
 pub(crate) fn mod_sub_qq_fast(b: &mut B, acc: &[QubitId], a: &[QubitId], p: U256) {

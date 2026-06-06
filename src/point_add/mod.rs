@@ -559,6 +559,14 @@ fn secp_direct_const_arith_enabled() -> bool {
     std::env::var("SECP_DIRECT_CONST_ARITH").ok().as_deref() == Some("1")
 }
 
+fn r84_lowq_enabled() -> bool {
+    std::env::var("R84_LOWQ").ok().as_deref() == Some("1")
+}
+
+fn r84_lowq_cin_borrow_enabled() -> bool {
+    std::env::var("R84_LOWQ_CIN_BORROW").ok().as_deref() == Some("1")
+}
+
 fn kal_vent_modadd_enabled() -> bool {
     std::env::var("KAL_VENT_MODADD").ok().as_deref() == Some("1")
 }
@@ -1238,6 +1246,11 @@ fn configure_ecdsafail_submission_route() {
     // high-window comparator carry-in, avoiding the generic split's extra
     // boundary qubit and low-window recompute.
     set_default_env("DIALOG_GCD_APPLY_FINAL_LOWQ", "0");
+    // Round84 mid-sub: ancilla-light Cuccaro const-add + carry-in borrow (1309->1307);
+    // compressed-block: current-step s2 composite-scratch fold (1308->1307).
+    set_default_env("R84_LOWQ", "1");
+    set_default_env("R84_LOWQ_CIN_BORROW", "1");
+    set_default_env("DIALOG_GCD_BORROW_CURRENT_S2", "1");
     set_default_env("DIALOG_GCD_APPLY_BOUNDARY_SPLIT", "100");
     set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT", "50");
     set_default_env("DIALOG_GCD_APPLY_CHUNKED_F_CUT2", "100");
@@ -1327,7 +1340,7 @@ fn configure_ecdsafail_submission_route() {
     // Re-rolled for the lowq0 fast-final + ACTIVE_ITERATIONS=262 route:
     // nonce 2432 validates 0/0/0 over all 9024 shots at
     // 1309q x 1,497,795 T = 1,960,613,655.
-    set_default_env("DIALOG_TAIL_NONCE", "78338");
+    set_default_env("DIALOG_TAIL_NONCE", "201664");
     set_default_env("DIALOG_GCD_APPLY_FINAL_WINDOWED_FAST_BLOCKS", "0");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a

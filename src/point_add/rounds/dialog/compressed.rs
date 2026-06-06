@@ -323,6 +323,24 @@ pub(crate) fn dialog_gcd_borrow_current_block_enabled() -> bool {
         == Some("1")
 }
 
+pub(crate) fn dialog_gcd_borrow_current_s2_enabled() -> bool {
+    // Successor lever to BORROW_CURRENT_BLOCK for the K2 path. The current step's
+    // own shift2 (`s2`) cell is provably |0> across its sub/add body window
+    // (forward: written only by the later shift phase; reverse: already
+    // uncomputed by reverse_unshift) and is restored to |0> by the body's
+    // measured uncompute before the shift/unshift consumer. Folding it into the
+    // composite-scratch borrow removes one fresh-allocated deficit lane at the
+    // width-clamped GCD-walk binder steps (where active_width is pinned at N and
+    // the future-log borrow has already shrunk a block), dropping the three
+    // compressed-block tobitvector near-binders one qubit. Pure relabel, 0 added
+    // Toffoli, value-exact on the reachable GCD support. Default off keeps the
+    // accepted op stream byte-identical.
+    std::env::var("DIALOG_GCD_BORROW_CURRENT_S2")
+        .ok()
+        .as_deref()
+        == Some("1")
+}
+
 pub(crate) struct DialogGcdCompositeScratch {
     lanes: Vec<QubitId>,
     owned: Vec<QubitId>,
@@ -394,6 +412,29 @@ pub(crate) fn dialog_gcd_build_composite_scratch(
     for &q in &u[active_width..] {
         if !compressed_log.contains(&q) {
             push(q);
+        }
+    }
+    if dialog_gcd_borrow_current_s2_enabled() && !raw_block.is_empty() {
+        // The CURRENT step's own K2 shift2 (`s2`) cell is |0> across this step's
+        // body window: forward it is written only by the later SHIFT phase
+        // (after the sub body), reverse it has just been uncomputed by
+        // reverse_unshift (before the add body). It is restored to |0> by the
+        // body's measured uncompute before either consumer runs. Folding it into
+        // the body-scratch borrow shrinks the fresh deficit by one lane at the
+        // width-clamped binder steps (the same retiming trick as the current-block
+        // compressed cells; pure relabel, 0 added Toffoli). The `push` closure
+        // excludes all raw_block cells, so add it explicitly with the same
+        // operand/duplicate guards. Disjoint from b0/b0_and_b1 (different slot
+        // offset) and from u/v (raw_block is its own register).
+        let group_size = dialog_gcd_sidecar_group_size();
+        let slot = step % group_size;
+        let s2 = raw_block[2 * group_size + slot];
+        if lanes.len() < want
+            && !lanes.contains(&s2)
+            && !u[..active_width].contains(&s2)
+            && !v[..active_width].contains(&s2)
+        {
+            lanes.push(s2);
         }
     }
     let owned = b.alloc_qubits(want - lanes.len());

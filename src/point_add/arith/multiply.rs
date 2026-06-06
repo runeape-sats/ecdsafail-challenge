@@ -1154,7 +1154,11 @@ pub(crate) fn squaring_sub_from_acc_schoolbook_lowq_shift22(
     }
     mod_sub_qq(b, acc, &hi, p);
     let (spill, flag_inv, ovf) = mod_shift_left_by_k_lowq(b, &hi, p, 22);
-    mod_sub_qq(b, acc, &hi, p);
+    if r84_lowq_enabled() {
+        mod_sub_qq_lowq(b, acc, &hi, p);
+    } else {
+        mod_sub_qq(b, acc, &hi, p);
+    }
     mod_shift_right_by_k_lowq(b, &hi, p, 22, spill, flag_inv, ovf);
     for _ in 0..10 {
         mod_halve_inplace_direct_const_fast(b, &hi, p);
