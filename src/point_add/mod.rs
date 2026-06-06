@@ -32730,7 +32730,10 @@ fn configure_ecdsafail_submission_route() {
     // prior #1 2,017,979,899 by 1,362,894). Value-exact on the reachable support
     // (dropped double-carry bit is 0 there, ~2^-22/call otherwise); residual
     // failures are Fiat-Shamir phase, dodged by a fresh tail nonce (re-hunted below).
-    set_default_env("KAL_DOUBLE_CARRY_TRUNC_W", "24");
+    // 1309q kd22 island: re-tighten the double-carry truncation window
+    // 24 -> 22. The classical GCD prefilter finds nonce 2000181, and the
+    // trusted simulator validates 0/0/0 over all 9024 shots at 1,514,748 T.
+    set_default_env("KAL_DOUBLE_CARRY_TRUNC_W", "22");
     // Likewise give back the FOLD-carry truncation bit for the final-window W2
     // island; the Toffoli budget still beats the 1320q frontier.
     // Re-tighten 24 -> 22 on the W2 base (the lazy-Solinas fold-carry window had
@@ -33006,13 +33009,13 @@ fn configure_ecdsafail_submission_route() {
     // Re-rolled for the KAL_DOUBLE_CARRY_TRUNC_W=21 re-tightening above: nonce
     // 1000001157 lands a clean island, validated 0/0/0 over all 9024 shots at
     // 1313q x 1,535,885 T = 2,016,617,005 (official ecdsafail run).
-    // Rebalanced 1309q route: spend one active GCD iteration and loosen the
-    // double carry window, then reclaim more Toffoli by moving the final apply
-    // chunk cut 190 -> 165 and width slope 1014 -> 1013. Tail nonce 4596 is
-    // trusted-clean: 0/0/0 over 9024 at 1309q x 1,515,788 T = 1,984,166,492.
+    // Rebalanced 1309q route: spend one active GCD iteration, move the final
+    // apply chunk cut 190 -> 165, width slope 1014 -> 1013, then re-tighten
+    // KAL_DOUBLE_CARRY_TRUNC_W to 22. Tail nonce 2000181 is trusted-clean:
+    // 0/0/0 over 9024 at 1309q x 1,514,748 T = 1,982,805,132.
     set_default_env("DIALOG_GCD_SELECTED_BODY_NOCIN", "1");
     set_default_env("DIALOG_GCD_SELECTED_BODY_GATE_SUFFIX_CARRIES", "4");
-    set_default_env("DIALOG_TAIL_NONCE", "4596");
+    set_default_env("DIALOG_TAIL_NONCE", "2000181");
     set_default_env("DIALOG_GCD_APPLY_FINAL_WINDOWED_FAST_BLOCKS", "2");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
