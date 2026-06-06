@@ -27953,6 +27953,429 @@ fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps_reverse_block_lifecycle(
     }
 }
 
+/// Opt-in fusion of the two sequential Solinas folds in the K=2 apply
+/// `double_y` step (and its `halve_y` mirror is intentionally left unfused;
+/// see the obstacle note in `dialog_gcd_fused_double_y`). Default OFF so the
+/// baseline op stream is byte-identical when unset.
+fn dialog_gcd_apply_fused_fold_enabled() -> bool {
+    std::env::var("DIALOG_GCD_APPLY_FUSED_FOLD").ok().as_deref() == Some("1")
+}
+
+/// Truncated controlled add of a *per-position-controlled* sparse constant.
+///
+/// Generalizes [`cadd_nbit_const_direct_trunc_fast`]: instead of one external
+/// `ctrl` gating a fixed constant `c`, each bit position `i` carries its own
+/// addend control `controls[i]` (the value added at weight `2^i` is
+/// `controls[i] ? 1 : 0`). The carry recurrence, sum, and measurement-uncompute
+/// are bit-for-bit the single-control routine with `ctrl` replaced by the
+/// position's control qubit, so it inherits that routine's exactness and
+/// phase-clean (free) carry cleanup. `last` is the (inclusive) truncation index:
+/// carries `> last` are assumed 0. Caller guarantees `last >= highest controlled
+/// position` so every addend bit lands in the sum.
+fn cadd_per_position_controls_trunc(
+    b: &mut B,
+    acc: &[QubitId],
+    controls: &[Option<QubitId>],
+    last: usize,
+) {
+    let n = acc.len();
+    debug_assert!(last < n);
+    debug_assert!(controls.len() <= n);
+    let kctrl = |i: usize| -> Option<QubitId> {
+        if i < controls.len() {
+            controls[i]
+        } else {
+            None
+        }
+    };
+    let carries = b.alloc_qubits(last + 1);
+
+    // Forward carry sweep, truncated at `last`. carry_i = maj(acc_i, k_i, carry_{i-1}).
+    for i in 0..=last {
+        let target = carries[i];
+        let carry_in = if i == 0 { None } else { Some(carries[i - 1]) };
+        if let Some(kc) = kctrl(i) {
+            if let Some(ci) = carry_in {
+                b.ccx(acc[i], ci, target);
+                b.ccx(kc, acc[i], target);
+                b.ccx(kc, ci, target);
+            } else {
+                b.ccx(acc[i], kc, target);
+            }
+        } else if let Some(ci) = carry_in {
+            b.ccx(acc[i], ci, target);
+        }
+    }
+
+    // Sum bits: acc_i ^= k_i ^ carry_{i-1}; carries above `last` are 0.
+    for i in 0..n {
+        if let Some(kc) = kctrl(i) {
+            b.cx(kc, acc[i]);
+        }
+        if i > 0 && i - 1 <= last {
+            b.cx(carries[i - 1], acc[i]);
+        }
+    }
+
+    // Measurement-uncompute carries in reverse (free; same identity as the adder).
+    for i in (0..=last).rev() {
+        let m = b.alloc_bit();
+        b.hmr(carries[i], m);
+        let carry_in = if i == 0 { None } else { Some(carries[i - 1]) };
+        if let Some(kc) = kctrl(i) {
+            b.x(acc[i]);
+            if let Some(ci) = carry_in {
+                b.cz_if(acc[i], kc, m);
+                b.cz_if(acc[i], ci, m);
+                b.x(acc[i]);
+                b.cz_if(kc, ci, m);
+            } else {
+                b.cz_if(acc[i], kc, m);
+                b.x(acc[i]);
+            }
+        } else if let Some(ci) = carry_in {
+            b.x(acc[i]);
+            b.cz_if(acc[i], ci, m);
+            b.x(acc[i]);
+        }
+    }
+
+    b.free_vec(&carries);
+}
+
+/// Truncated controlled SUBTRACT of a *per-position-controlled* sparse constant.
+///
+/// Borrow analogue of [`cadd_per_position_controls_trunc`]: each bit position `i`
+/// carries its own subtrahend control `controls[i]` (the value subtracted at
+/// weight `2^i` is `controls[i] ? 1 : 0`). The borrow recurrence, difference, and
+/// measurement-uncompute are bit-for-bit [`csub_nbit_const_direct_trunc_fast`]
+/// with the single `ctrl` replaced by the position's control qubit, so it is the
+/// exact inverse of `cadd_per_position_controls_trunc` for the same `controls`
+/// and `last` (when no carry/borrow is truncated). `last` is the inclusive
+/// truncation index; caller guarantees `last >= highest controlled position`.
+fn csub_per_position_controls_trunc(
+    b: &mut B,
+    acc: &[QubitId],
+    controls: &[Option<QubitId>],
+    last: usize,
+) {
+    let n = acc.len();
+    debug_assert!(last < n);
+    debug_assert!(controls.len() <= n);
+    let kctrl = |i: usize| -> Option<QubitId> {
+        if i < controls.len() {
+            controls[i]
+        } else {
+            None
+        }
+    };
+    let borrows = b.alloc_qubits(last + 1);
+
+    // Forward borrow sweep, truncated at `last`.
+    for i in 0..=last {
+        let target = borrows[i];
+        let borrow_in = if i == 0 { None } else { Some(borrows[i - 1]) };
+        if let Some(kc) = kctrl(i) {
+            b.x(acc[i]);
+            if let Some(bi) = borrow_in {
+                b.ccx(acc[i], bi, target);
+                b.ccx(kc, acc[i], target);
+                b.ccx(kc, bi, target);
+            } else {
+                b.ccx(acc[i], kc, target);
+            }
+            b.x(acc[i]);
+        } else if let Some(bi) = borrow_in {
+            b.x(acc[i]);
+            b.ccx(acc[i], bi, target);
+            b.x(acc[i]);
+        }
+    }
+
+    // Difference bits: acc_i ^= k_i ^ borrow_{i-1}; borrows above `last` are 0.
+    for i in 0..n {
+        if let Some(kc) = kctrl(i) {
+            b.cx(kc, acc[i]);
+        }
+        if i > 0 && i - 1 <= last {
+            b.cx(borrows[i - 1], acc[i]);
+        }
+    }
+
+    // Measurement-uncompute borrows in reverse (free; same identity as the sub).
+    for i in (0..=last).rev() {
+        let m = b.alloc_bit();
+        b.hmr(borrows[i], m);
+        let borrow_in = if i == 0 { None } else { Some(borrows[i - 1]) };
+        if let Some(kc) = kctrl(i) {
+            if let Some(bi) = borrow_in {
+                b.cz_if(acc[i], kc, m);
+                b.cz_if(acc[i], bi, m);
+                b.cz_if(kc, bi, m);
+            } else {
+                b.cz_if(acc[i], kc, m);
+            }
+        } else if let Some(bi) = borrow_in {
+            b.cz_if(acc[i], bi, m);
+        }
+    }
+
+    b.free_vec(&borrows);
+}
+
+/// Fused K=2 apply `double_y`: value-identical replacement for the sequential
+///
+///     mod_double_inplace_fast(b, y, p);          // shift1 + Solinas fold #1 (c·ovf1)
+///     cmod_double_inplace_lazy(b, y, p, s2);      // cond-shift2 + Solinas fold #2 (c·ovf2)
+///
+/// performed with a SINGLE shared carry chain instead of two.
+///
+/// Math (c = 2^256 − p; the fold never reaches the top bit under the truncation
+/// window, so ovf2 is independent of fold #1): let ovf1 = old y[255], and after
+/// an *unfolded* conditional second shift ovf2 = s2 & top(Y0). The two folds'
+/// net additive contribution to the doubly-shifted register is
+///
+///     δ = c·ovf2 + c·ovf1·(1 + s2) = c·e + 2c·d,
+///     where d = ovf1 & s2,  e = (ovf1 & ¬s2) ^ ovf2   (the two terms are disjoint).
+///
+/// δ = c·e + (c<<1)·d is added as one truncated ripple of a per-position-controlled
+/// sparse constant: each bit of c·e/2c·d maps to a single control derived from
+/// {e, d, e^d, e|d, ¬e&d, e&d} (all but `d`,`e`,`h=e&d` are free CX combinations).
+///
+/// The reverse `halve_y` IS also fused — see [`dialog_gcd_fused_halve_y`]. The
+/// key that unlocks it: the fused double leaves `y_new[0] = e` and (iff s2)
+/// `y_new[1] = ovf1`, so the reverse recovers BOTH fold controls directly from
+/// its input register (`e = y_new[0]`, `d = s2 & y_new[1]`) without needing a
+/// first sub+shift, then does ONE combined csub of the same δ.
+fn dialog_gcd_fused_double_y(b: &mut B, y: &[QubitId], p: U256, s2: QubitId) {
+    let n = y.len();
+    debug_assert_eq!(n, 256);
+    let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1));
+
+    // ── shift1 (unconditional left shift): ovf1 = old y[255]; y[0] = 0 ──
+    let ovf1 = b.alloc_qubit();
+    b.swap(y[n - 1], ovf1);
+    for i in (0..n - 1).rev() {
+        b.swap(y[i], y[i + 1]);
+    }
+
+    // ── cond-shift2 (left shift gated by s2) on the UNFOLDED register ──
+    // ovf2 = s2 & top(Y0); y[0] = 0 (and y[1] = 0 iff s2, used by cleanup).
+    let ovf2 = b.alloc_qubit();
+    cswap(b, s2, y[n - 1], ovf2);
+    for i in (0..n - 1).rev() {
+        cswap(b, s2, y[i], y[i + 1]);
+    }
+
+    // ── derive the fold controls e, d, h (3 CCX) + free-CX combinations ──
+    let e = b.alloc_qubit();
+    let d = b.alloc_qubit();
+    let h = b.alloc_qubit();
+    // d = ovf1 & s2
+    b.ccx(ovf1, s2, d);
+    // e = (ovf1 & ¬s2) ^ ovf2   (the two terms are mutually exclusive)
+    b.x(s2);
+    b.ccx(ovf1, s2, e);
+    b.x(s2);
+    b.cx(ovf2, e);
+    // h = e & d  (= ovf2 & d, since e == ovf2 whenever d == 1)
+    b.ccx(ovf2, d, h);
+    // free-CX derived controls
+    let xed = b.alloc_qubit(); // e ^ d
+    b.cx(e, xed);
+    b.cx(d, xed);
+    let eord = b.alloc_qubit(); // e | d  = (e^d) ^ (e&d)
+    b.cx(xed, eord);
+    b.cx(h, eord);
+    let n10 = b.alloc_qubit(); // ¬e & d = d ^ (e&d)
+    b.cx(d, n10);
+    b.cx(h, n10);
+
+    // ── combined fold: y += δ = c·e + 2c·d, one truncated ripple ──
+    // Per-position controls of the constant whose bits are
+    //   c·e bits {0,4,6,7,8,9,32} and 2c·d bits {1,5,7,8,9,10,33}:
+    //   0:e 1:d 4:e 5:d 6:e 7:(e^d) 8:(e|d) 9:(e|d) 10:(¬e&d) 11:(e&d) 32:e 33:d
+    let hi_delta = highest_set_bit(c) + 1; // = 33 for secp256k1
+    let mut controls: Vec<Option<QubitId>> = vec![None; hi_delta + 1];
+    controls[0] = Some(e);
+    controls[1] = Some(d);
+    controls[4] = Some(e);
+    controls[5] = Some(d);
+    controls[6] = Some(e);
+    controls[7] = Some(xed);
+    controls[8] = Some(eord);
+    controls[9] = Some(eord);
+    controls[10] = Some(n10);
+    controls[11] = Some(h);
+    controls[highest_set_bit(c)] = Some(e); // bit 32
+    controls[hi_delta] = Some(d); // bit 33
+    let last = match double_carry_trunc_window() {
+        Some(w) => core::cmp::min(n - 2, hi_delta.saturating_add(w)),
+        None => n - 2,
+    };
+    cadd_per_position_controls_trunc(b, y, &controls, last);
+
+    // ── cleanup: return all 8 ancilla to |0⟩ (deterministic, phase-free) ──
+    // After the fold y[0] = e and (iff s2) y[1] = ovf1 (the second clean low bit).
+    // Uncompute derived controls first (reverse free CX, while e,d,h still hold).
+    b.cx(h, n10);
+    b.cx(d, n10);
+    b.cx(h, eord);
+    b.cx(xed, eord);
+    b.cx(d, xed);
+    b.cx(e, xed);
+    b.free(n10);
+    b.free(eord);
+    b.free(xed);
+    // Clear h = ovf2 & d (ovf2, d still live).
+    b.ccx(ovf2, d, h);
+    b.free(h);
+    // Clear e via parity: y[0] == e.
+    b.cx(y[0], e);
+    // Clear d via the register: d == s2 & y[1].
+    b.ccx(s2, y[1], d);
+    b.free(d);
+    b.free(e);
+    // Clear ovf1 == (s2 ? y[1] : y[0]).
+    b.ccx(s2, y[1], ovf1);
+    b.x(s2);
+    b.ccx(s2, y[0], ovf1);
+    b.x(s2);
+    b.free(ovf1);
+    // Clear ovf2 == s2 & y[0].
+    b.ccx(s2, y[0], ovf2);
+    b.free(ovf2);
+}
+
+/// Fused K=2 apply reverse `halve_y`: the exact inverse of
+/// [`dialog_gcd_fused_double_y`]; a single-carry-chain replacement for the
+/// sequential reverse halve
+///
+///     mod_halve_inplace_fast(b, y, p);            // un-fold #1 then un-shift1
+///     cmod_halve_inplace_lazy(b, y, p, s2);        // un-fold #2 then un-shift2
+///
+/// Its input is `y_new`, the fused double's output, which encodes BOTH fold
+/// controls directly in its low bits (this is what makes the fusion invertible
+/// in one chain):
+///
+///     e = y_new[0];   d = s2 & y_new[1]   (the double set y_new[1]=ovf1 iff s2);
+///     h = e & d.
+///
+/// The overflow bits the reverse shifts must re-insert are reconstructed from
+/// the same controls:
+///
+///     ovf2 = e & s2;   ovf1 = (s2 ? d : e) = (d & s2) ^ (e & ¬s2).
+///
+/// We then do ONE combined csub of δ = c·e + 2c·d (the same per-position sparse
+/// constant the forward used, via [`csub_per_position_controls_trunc`]), then
+/// un-cond-shift2 (gated by s2) re-inserting ovf2 at the top, then un-shift1
+/// re-inserting ovf1. After the csub the register's low bits are cleared, so the
+/// fold controls can no longer be read off `y`; instead the ancilla are returned
+/// to |0⟩ via the still-live overflow qubits (e == ovf1 when s2=0, e == ovf2 when
+/// s2=1; d == ovf1 when s2=1), and the overflow qubits themselves via the
+/// register bit each un-shift just re-inserted. Deterministic and phase-free.
+fn dialog_gcd_fused_halve_y(b: &mut B, y: &[QubitId], p: U256, s2: QubitId) {
+    let n = y.len();
+    debug_assert_eq!(n, 256);
+    let c = U256::MAX.wrapping_sub(p).wrapping_add(U256::from(1));
+
+    // ── recover the fold controls e, d, h directly from y_new ──
+    let e = b.alloc_qubit();
+    let d = b.alloc_qubit();
+    let h = b.alloc_qubit();
+    // e = y_new[0]
+    b.cx(y[0], e);
+    // d = s2 & y_new[1]
+    b.ccx(s2, y[1], d);
+    // h = e & d
+    b.ccx(e, d, h);
+    // free-CX derived controls (identical to the forward fold)
+    let xed = b.alloc_qubit(); // e ^ d
+    b.cx(e, xed);
+    b.cx(d, xed);
+    let eord = b.alloc_qubit(); // e | d  = (e^d) ^ (e&d)
+    b.cx(xed, eord);
+    b.cx(h, eord);
+    let n10 = b.alloc_qubit(); // ¬e & d = d ^ (e&d)
+    b.cx(d, n10);
+    b.cx(h, n10);
+
+    // ── reconstruct the overflow bits for the reverse shifts ──
+    let ovf2 = b.alloc_qubit(); // ovf2 = e & s2
+    let ovf1 = b.alloc_qubit(); // ovf1 = (s2 ? d : e)
+    b.ccx(e, s2, ovf2);
+    b.ccx(s2, d, ovf1);
+    b.x(s2);
+    b.ccx(s2, e, ovf1);
+    b.x(s2);
+
+    // ── combined fold inverse: y −= δ = c·e + 2c·d, one truncated ripple ──
+    // Same per-position controls as the forward fused double.
+    let hi_delta = highest_set_bit(c) + 1; // = 33 for secp256k1
+    let mut controls: Vec<Option<QubitId>> = vec![None; hi_delta + 1];
+    controls[0] = Some(e);
+    controls[1] = Some(d);
+    controls[4] = Some(e);
+    controls[5] = Some(d);
+    controls[6] = Some(e);
+    controls[7] = Some(xed);
+    controls[8] = Some(eord);
+    controls[9] = Some(eord);
+    controls[10] = Some(n10);
+    controls[11] = Some(h);
+    controls[highest_set_bit(c)] = Some(e); // bit 32
+    controls[hi_delta] = Some(d); // bit 33
+    let last = match double_carry_trunc_window() {
+        Some(w) => core::cmp::min(n - 2, hi_delta.saturating_add(w)),
+        None => n - 2,
+    };
+    csub_per_position_controls_trunc(b, y, &controls, last);
+
+    // ── uncompute derived controls (reverse free CX, while e,d,h still hold) ──
+    b.cx(h, n10);
+    b.cx(d, n10);
+    b.cx(h, eord);
+    b.cx(xed, eord);
+    b.cx(d, xed);
+    b.cx(e, xed);
+    b.free(n10);
+    b.free(eord);
+    b.free(xed);
+    // Clear h = e & d (e, d still live).
+    b.ccx(e, d, h);
+    b.free(h);
+    // Clear e and d via the live overflow qubits (the register low bits are now
+    // cleared by the csub, so we cannot read them off y any more):
+    //   e == (s2 ? ovf2 : ovf1);   d == (s2 ? ovf1 : 0).
+    b.x(s2);
+    b.ccx(s2, ovf1, e); // s2=0: e ^= ovf1
+    b.x(s2);
+    b.ccx(s2, ovf2, e); // s2=1: e ^= ovf2
+    b.ccx(s2, ovf1, d); // s2=1: d ^= ovf1   (s2=0: d already 0)
+    b.free(e);
+    b.free(d);
+
+    // ── un-cond-shift2 (right shift gated by s2), re-inserting ovf2 at top ──
+    for i in 0..n - 1 {
+        cswap(b, s2, y[i], y[i + 1]);
+    }
+    cswap(b, s2, y[n - 1], ovf2);
+    // The boundary cswap already pulled the vacated top bit (0) into ovf2, so
+    // ovf2 is |0> here. (A `ccx(s2, y[n-1], ovf2)` would WRONGLY re-set it to
+    // s2&y[n-1] = e, dirtying the ancilla — the free's reset then masks the
+    // value error but leaks global phase. So: no extra clear.)
+    b.free(ovf2);
+
+    // ── un-shift1 (unconditional right shift), re-inserting ovf1 at top ──
+    for i in 0..n - 1 {
+        b.swap(y[i], y[i + 1]);
+    }
+    b.swap(y[n - 1], ovf1);
+    // The swap already pulled the vacated top bit (0) into ovf1, so ovf1 is |0>
+    // here. (A `cx(y[n-1], ovf1)` would re-dirty it — see ovf2 note above.)
+    b.free(ovf1);
+}
+
 fn emit_dialog_gcd_compressed_sidecar_apply_bitvector_block_lifecycle(
     b: &mut B,
     compressed_log: &[QubitId],
@@ -27983,15 +28406,22 @@ fn emit_dialog_gcd_compressed_sidecar_apply_bitvector_block_lifecycle(
             let b0_and_b1 = raw_block[2 * slot + 1];
 
             b.set_phase("dialog_gcd_compressed_block_apply_double_y");
-            mod_double_inplace_fast(b, y, p);
-            if dialog_gcd_k2_enabled()
-                && std::env::var("DIALOG_GCD_K2_NO_APPLY").ok().as_deref() != Some("1")
-            {
-                // mirror the forward K=2 second shift: conditional 2nd double of y.
-                // MUST use the lazy (Solinas, truncated) controlled double so it
-                // composes with the uncontrolled mod_double_inplace_fast above.
+            let apply_k2 = dialog_gcd_k2_enabled()
+                && std::env::var("DIALOG_GCD_K2_NO_APPLY").ok().as_deref() != Some("1");
+            if apply_k2 && dialog_gcd_apply_fused_fold_enabled() {
+                // Fuse mod_double_inplace_fast + cmod_double_inplace_lazy into a
+                // single shared carry chain (value-identical; see fn doc).
                 let s2 = raw_block[2 * dialog_gcd_sidecar_group_size() + slot];
-                cmod_double_inplace_lazy(b, y, p, s2);
+                dialog_gcd_fused_double_y(b, y, p, s2);
+            } else {
+                mod_double_inplace_fast(b, y, p);
+                if apply_k2 {
+                    // mirror the forward K=2 second shift: conditional 2nd double of y.
+                    // MUST use the lazy (Solinas, truncated) controlled double so it
+                    // composes with the uncontrolled mod_double_inplace_fast above.
+                    let s2 = raw_block[2 * dialog_gcd_sidecar_group_size() + slot];
+                    cmod_double_inplace_lazy(b, y, p, s2);
+                }
             }
 
             b.set_phase("dialog_gcd_compressed_block_apply_cadd");
@@ -28072,14 +28502,25 @@ fn emit_dialog_gcd_compressed_sidecar_apply_bitvector_reverse_exact_block_lifecy
             }
 
             b.set_phase("dialog_gcd_compressed_block_apply_reverse_halve_y");
-            mod_halve_inplace_fast(b, y, p);
-            if dialog_gcd_k2_enabled()
-                && std::env::var("DIALOG_GCD_K2_NO_APPLY").ok().as_deref() != Some("1")
+            let apply_k2 = dialog_gcd_k2_enabled()
+                && std::env::var("DIALOG_GCD_K2_NO_APPLY").ok().as_deref() != Some("1");
+            if apply_k2
+                && dialog_gcd_apply_fused_fold_enabled()
+                && std::env::var("DIALOG_GCD_FUSE_HALVE_OFF").ok().as_deref() != Some("1")
             {
-                // mirror the forward K=2 second shift: conditional 2nd halve of y.
-                // MUST use the lazy (Solinas, truncated) controlled halve to match.
+                // Fuse mod_halve_inplace_fast + cmod_halve_inplace_lazy into a
+                // single shared borrow chain (exact inverse of the fused double;
+                // see fn doc on dialog_gcd_fused_halve_y).
                 let s2 = raw_block[2 * dialog_gcd_sidecar_group_size() + slot];
-                cmod_halve_inplace_lazy(b, y, p, s2);
+                dialog_gcd_fused_halve_y(b, y, p, s2);
+            } else {
+                mod_halve_inplace_fast(b, y, p);
+                if apply_k2 {
+                    // mirror the forward K=2 second shift: conditional 2nd halve of y.
+                    // MUST use the lazy (Solinas, truncated) controlled halve to match.
+                    let s2 = raw_block[2 * dialog_gcd_sidecar_group_size() + slot];
+                    cmod_halve_inplace_lazy(b, y, p, s2);
+                }
             }
         }
 
@@ -32247,8 +32688,12 @@ fn configure_ecdsafail_submission_route() {
     // Margin 7 -> 6 stacked on the WIDTH_SLOPE=711 tightening: narrows the per-step
     // comparator on low/mid-width GCD steps, orthogonal to the slope envelope.
     set_default_env("DIALOG_GCD_PA9024_COMPARE_SCHEDULE_MARGIN", "6");
-    // Final-window W2 gives back one DOUBLE-carry truncation bit; this keeps the
-    // cleaner safety stack peak-neutral at 1320q.
+    // DOUBLE-carry lazy-Solinas window re-tightened 22 -> 21 on the peak-1313
+    // K2_PAIR_COMPRESS base: -1,038 avg executed Toffoli, peak-neutral at 1313q
+    // (avg_T 1,536,923 -> 1,535,885; 1313 x 1,535,885 = 2,016,617,005, beats the
+    // prior #1 2,017,979,899 by 1,362,894). Value-exact on the reachable support
+    // (dropped double-carry bit is 0 there, ~2^-22/call otherwise); residual
+    // failures are Fiat-Shamir phase, dodged by a fresh tail nonce (re-hunted below).
     set_default_env("KAL_DOUBLE_CARRY_TRUNC_W", "21");
     // Likewise give back the FOLD-carry truncation bit for the final-window W2
     // island; the Toffoli budget still beats the 1320q frontier.
@@ -32256,7 +32701,7 @@ fn configure_ecdsafail_submission_route() {
     // been left loose). Value-exact on the reachable support (the dropped fold
     // carry bits are 0 there); residual failures are pure Fiat-Shamir, dodged by
     // the shared re-rolled tail nonce below.
-    set_default_env("KAL_FOLD_CARRY_TRUNC_W", "21");
+    set_default_env("KAL_FOLD_CARRY_TRUNC_W", "22");
     set_default_env("DIALOG_GCD_ROUND763_DEDUP", "1");
     set_default_env("DIALOG_GCD_ROUND763_COMPRESS_LEVER", "1");
     set_default_env("DIALOG_GCD_MEASURED_UNDERFLOW_GATE", "1");
@@ -32287,18 +32732,16 @@ fn configure_ecdsafail_submission_route() {
     // K2 pair-compressed route spends one branch-comparator bit back from the
     // newest frontier cut. This keeps the lower 1313q tier while landing a much
     // denser clean island than the 45-bit edge.
-    // Re-tighten 46 -> 45 on anshu4321's 1313q apply-teardown base (which had
-    // relaxed the GCD branch comparator to 46 to land its structural island).
-    // The comparator still decides every branch correctly on the reachable
-    // support at 45; clean Fiat-Shamir island at the re-rolled tail nonce below
-    // (5005587), found via island_search_prefilter and quantum-confirmed.
-    // avg executed Toffoli 1,536,923 -> 1,536,047 (-876), peak-neutral at 1313q.
-    set_default_env("DIALOG_GCD_COMPARE_BITS", "45");
-    // Spend one apply-clean comparator bit back as well. The extra guard costs
-    // 681 executed Toffoli on this route and still beats the current frontier.
-    set_default_env("DIALOG_GCD_APPLY_CLEAN_COMPARE_BITS", "20");
+    // Both-phase apply fold-fusion: spend comparator bits back to cb=52 (the
+    // exact-screen zone) so the on-GPU island finder lands a clean Fiat-Shamir
+    // nonce; the fold-fusion's -25k Toffoli keeps the score well under 2B.
+    set_default_env("DIALOG_GCD_COMPARE_BITS", "52");
+    set_default_env("DIALOG_GCD_APPLY_CLEAN_COMPARE_BITS", "24");
     set_default_env("DIALOG_GCD_RAW_PA", "1");
     set_default_env("DIALOG_GCD_K2", "1");
+    // Both-phase apply fold-fusion (fused double_y + halve_y Solinas folds,
+    // single shared carry chain; -25k avg Toffoli, phase-clean).
+    set_default_env("DIALOG_GCD_APPLY_FUSED_FOLD", "1");
     // K2 pair transcript compressor: pack two K2 transcript steps into five
     // sidecar bits by using the local reachability constraint between step A's
     // shift2 bit and step B's low branch bit. This cuts the current transcript
@@ -32488,7 +32931,7 @@ fn configure_ecdsafail_submission_route() {
     // KAL_FOLD 24->22 and APPLY_CLEAN_COMPARE_BITS 20->19 re-tightenings above.
     // 1011 -> 1012: one more width-envelope notch, stacked on COMPARE_BITS=46
     // under the nonce-10429 island below. Value-exact, peak-neutral at 1320q.
-    set_default_env("DIALOG_GCD_WIDTH_SLOPE_X1000", "1016");
+    set_default_env("DIALOG_GCD_WIDTH_SLOPE_X1000", "1014");
     // Active-395 island on the promoted 1355q base: validated 0/0/0 over all
     // 9024 shots at 1355q x 1,773,011 T.
     set_default_env("DIALOG_REROLL", "4269");
@@ -32524,11 +32967,11 @@ fn configure_ecdsafail_submission_route() {
     // Pair-compressed 46/20 island: nonce 689 lands a clean trusted run,
     // validated 0/0/0 over all 9024 shots at
     // 1313q x 1,536,923 T = 2,017,979,899.
+    // Re-rolled for the KAL_DOUBLE_CARRY_TRUNC_W=21 re-tightening above: nonce
+    // 1000001157 lands a clean island, validated 0/0/0 over all 9024 shots at
+    // 1313q x 1,535,885 T = 2,016,617,005 (official ecdsafail run).
     set_default_env("DIALOG_GCD_SELECTED_BODY_NOCIN", "1");
-    // Re-rolled for the COMPARE_BITS 46 -> 45 re-tightening on the 1313q base:
-    // nonce 5005587 lands a clean island, validated 0/0/0 over all 9024 shots at
-    // 1313q x 1,536,047 T = 2,016,829,711.
-    set_default_env("DIALOG_TAIL_NONCE", "19080008907");
+    set_default_env("DIALOG_TAIL_NONCE", "172380");
     set_default_env("DIALOG_GCD_APPLY_FINAL_WINDOWED_FAST_BLOCKS", "2");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
