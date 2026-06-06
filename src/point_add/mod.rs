@@ -1080,11 +1080,10 @@ fn configure_ecdsafail_submission_route() {
     // 260 -> 259 after the 1320q apply teardown: saves one GCD body/reverse row.
     // Stacked with KAL_DOUBLE_CARRY_TRUNC_W=22, the nonce below lands the clean
     // 1320q island while improving the custom-five seed's Toffoli count.
-    // 258 -> 261 on the lowq0 final-chunk route: spend three GCD rows from the
-    // recovered fast-final Toffoli budget to remove most nonconvergence pressure
-    // while staying under the 1309q round84 peak. Re-hunted with the GCD filter
-    // and quantum-confirmed at tail nonce 5646.
-    set_default_env("DIALOG_GCD_ACTIVE_ITERATIONS", "261");
+    // 262 -> 260 on the lowq0 final-chunk route: recover two GCD rows while the
+    // active-260 island stays dense enough to re-hunt and quantum-confirm at
+    // tail nonce 58134.
+    set_default_env("DIALOG_GCD_ACTIVE_ITERATIONS", "260");
     set_default_env("DIALOG_GCD_RAW_IPMUL_TERMINAL_REUSE", "1");
     set_default_env("DIALOG_GCD_RAW_IPMUL_CLEAR_P_RESIDUAL", "1");
     set_default_env("DIALOG_GCD_RAW_QUOTIENT_TERMINAL_REUSE", "1");
@@ -1324,10 +1323,10 @@ fn configure_ecdsafail_submission_route() {
     // Re-rolled for the APPLY_CLEAN_COMPARE_BITS 21 -> 20 re-tightening above:
     // nonce 721381 lands a clean Fiat-Shamir island, validated 0/0/0 over all
     // 9024 shots at 1309q x 1,503,355 T = 1,967,891,695.
-    // Re-rolled for the lowq0 fast-final + ACTIVE_ITERATIONS=261 route:
-    // nonce 5646 validates 0/0/0 over all 9024 shots at
-    // 1309q x 1,494,942 T = 1,956,879,078.
-    set_default_env("DIALOG_TAIL_NONCE", "5646");
+    // Re-rolled for the lowq0 fast-final + ACTIVE_ITERATIONS=260 route:
+    // nonce 58134 validates 0/0/0 over all 9024 shots at
+    // 1309q x 1,492,097 T = 1,953,154,973.
+    set_default_env("DIALOG_TAIL_NONCE", "58134");
     set_default_env("DIALOG_GCD_APPLY_FINAL_WINDOWED_FAST_BLOCKS", "0");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
     // b0_and_b1 from the in-flight comparator carry instead of materializing a
