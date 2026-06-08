@@ -791,7 +791,12 @@ pub(crate) fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps_block_lifecyc
             }
 
             b.set_phase("dialog_gcd_compressed_block_tobitvector_cswap");
-            for (i, (&ui, &vi)) in u_active.iter().zip(v_active.iter()).enumerate() {
+            let cswap_width = dialog_gcd_tobitvector_cswap_width(active_width, step);
+            for (i, (&ui, &vi)) in u[..cswap_width]
+                .iter()
+                .zip(v[..cswap_width].iter())
+                .enumerate()
+            {
                 if i == 0 && dialog_gcd_odd_u_lowbit_fastpath_enabled() {
                     continue;
                 }
@@ -980,7 +985,12 @@ pub(crate) fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps_reverse_block
             dialog_gcd_controlled_add_selected(b, u_active, v_active, b0, borrowed_carries, step);
 
             b.set_phase("dialog_gcd_compressed_block_tobitvector_reverse_cswap");
-            for (i, (&ui, &vi)) in u_active.iter().zip(v_active.iter()).enumerate() {
+            let cswap_width = dialog_gcd_tobitvector_cswap_width(active_width, step);
+            for (i, (&ui, &vi)) in u[..cswap_width]
+                .iter()
+                .zip(v[..cswap_width].iter())
+                .enumerate()
+            {
                 if i == 0 && dialog_gcd_odd_u_lowbit_fastpath_enabled() {
                     continue;
                 }
@@ -1083,13 +1093,14 @@ pub(crate) fn emit_dialog_gcd_compressed_sidecar_apply_bitvector_block_lifecycle
 
             b.set_phase("dialog_gcd_compressed_block_apply_cadd");
             if dialog_gcd_raw_apply_materialized_special_add_enabled() {
-                dialog_gcd_cmod_add_materialized_pseudomersenne_with_clean_scratch(
+                dialog_gcd_cmod_add_materialized_pseudomersenne_with_clean_scratch_at_step(
                     b,
                     y,
                     x,
                     b0,
                     p,
                     clean_scratch,
+                    Some(step),
                 );
             } else if dialog_gcd_raw_apply_direct_special_add_enabled() {
                 dialog_gcd_cmod_add_pseudomersenne_lowq(b, y, x, b0, p);
@@ -1144,13 +1155,14 @@ pub(crate) fn emit_dialog_gcd_compressed_sidecar_apply_bitvector_reverse_exact_b
 
             b.set_phase("dialog_gcd_compressed_block_apply_reverse_csub");
             if dialog_gcd_raw_apply_reverse_materialized_special_sub_enabled() {
-                dialog_gcd_cmod_sub_materialized_pseudomersenne_with_clean_scratch(
+                dialog_gcd_cmod_sub_materialized_pseudomersenne_with_clean_scratch_at_step(
                     b,
                     y,
                     x,
                     b0,
                     p,
                     clean_scratch,
+                    Some(step),
                 );
             } else if dialog_gcd_raw_apply_reverse_fast_sub_enabled() {
                 cmod_sub_qq(b, y, x, b0, p);
@@ -1227,7 +1239,12 @@ pub(crate) fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps(
         b.free(cmp);
 
         b.set_phase("dialog_gcd_compressed_sidecar_tobitvector_cswap");
-        for (i, (&ui, &vi)) in u_active.iter().zip(v_active.iter()).enumerate() {
+        let cswap_width = dialog_gcd_tobitvector_cswap_width(active_width, step);
+        for (i, (&ui, &vi)) in u[..cswap_width]
+            .iter()
+            .zip(v[..cswap_width].iter())
+            .enumerate()
+        {
             if i == 0 && dialog_gcd_odd_u_lowbit_fastpath_enabled() {
                 continue;
             }
@@ -1295,7 +1312,12 @@ pub(crate) fn emit_dialog_gcd_compressed_sidecar_tobitvector_steps_reverse(
         dialog_gcd_controlled_add_selected(b, u_active, v_active, b0, borrowed_carries, step);
 
         b.set_phase("dialog_gcd_compressed_sidecar_tobitvector_reverse_cswap");
-        for (i, (&ui, &vi)) in u_active.iter().zip(v_active.iter()).enumerate() {
+        let cswap_width = dialog_gcd_tobitvector_cswap_width(active_width, step);
+        for (i, (&ui, &vi)) in u[..cswap_width]
+            .iter()
+            .zip(v[..cswap_width].iter())
+            .enumerate()
+        {
             if i == 0 && dialog_gcd_odd_u_lowbit_fastpath_enabled() {
                 continue;
             }
@@ -1354,7 +1376,7 @@ pub(crate) fn emit_dialog_gcd_compressed_sidecar_apply_bitvector(
 
         b.set_phase("dialog_gcd_compressed_sidecar_apply_cadd");
         if dialog_gcd_raw_apply_materialized_special_add_enabled() {
-            dialog_gcd_cmod_add_materialized_pseudomersenne(b, y, x, b0, p);
+            dialog_gcd_cmod_add_materialized_pseudomersenne_at_step(b, y, x, b0, p, Some(step));
         } else if dialog_gcd_raw_apply_direct_special_add_enabled() {
             dialog_gcd_cmod_add_pseudomersenne_lowq(b, y, x, b0, p);
         } else {
@@ -1412,7 +1434,7 @@ pub(crate) fn emit_dialog_gcd_compressed_sidecar_apply_bitvector_reverse_exact(
 
         b.set_phase("dialog_gcd_compressed_sidecar_apply_reverse_csub");
         if dialog_gcd_raw_apply_reverse_materialized_special_sub_enabled() {
-            dialog_gcd_cmod_sub_materialized_pseudomersenne(b, y, x, b0, p);
+            dialog_gcd_cmod_sub_materialized_pseudomersenne_at_step(b, y, x, b0, p, Some(step));
         } else if dialog_gcd_raw_apply_reverse_fast_sub_enabled() {
             cmod_sub_qq(b, y, x, b0, p);
         } else {

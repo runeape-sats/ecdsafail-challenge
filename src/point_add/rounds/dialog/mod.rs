@@ -208,6 +208,18 @@ pub(crate) fn dialog_gcd_body_carry_band_trim(step: usize) -> Option<usize> {
     Some(trims[band])
 }
 
+pub(crate) fn dialog_gcd_tobitvector_cswap_width(active_width: usize, step: usize) -> usize {
+    if std::env::var("DIALOG_GCD_TOBITVECTOR_CSWAP_BODY_TRIM")
+        .ok()
+        .as_deref()
+        == Some("1")
+    {
+        dialog_gcd_body_carry_trunc_width(active_width, step).min(active_width)
+    } else {
+        active_width
+    }
+}
+
 pub(crate) fn dialog_gcd_body_carry_trunc_width(active_width: usize, step: usize) -> usize {
     let mut w = dialog_gcd_body_carry_band_trim(step).unwrap_or_else(|| {
         std::env::var("DIALOG_GCD_BODY_CARRY_TRUNC_W")
@@ -795,7 +807,26 @@ pub(crate) fn dialog_gcd_cmod_add_materialized_pseudomersenne(
     ctrl: QubitId,
     p: U256,
 ) {
-    dialog_gcd_cmod_add_materialized_pseudomersenne_with_clean_scratch(b, acc, a, ctrl, p, &[]);
+    dialog_gcd_cmod_add_materialized_pseudomersenne_at_step(b, acc, a, ctrl, p, None);
+}
+
+pub(crate) fn dialog_gcd_cmod_add_materialized_pseudomersenne_at_step(
+    b: &mut B,
+    acc: &[QubitId],
+    a: &[QubitId],
+    ctrl: QubitId,
+    p: U256,
+    step: Option<usize>,
+) {
+    dialog_gcd_cmod_add_materialized_pseudomersenne_with_clean_scratch_at_step(
+        b,
+        acc,
+        a,
+        ctrl,
+        p,
+        &[],
+        step,
+    );
 }
 
 pub(crate) fn dialog_gcd_cmod_add_materialized_pseudomersenne_with_clean_scratch(
@@ -805,6 +836,26 @@ pub(crate) fn dialog_gcd_cmod_add_materialized_pseudomersenne_with_clean_scratch
     ctrl: QubitId,
     p: U256,
     clean_scratch: &[QubitId],
+) {
+    dialog_gcd_cmod_add_materialized_pseudomersenne_with_clean_scratch_at_step(
+        b,
+        acc,
+        a,
+        ctrl,
+        p,
+        clean_scratch,
+        None,
+    );
+}
+
+pub(crate) fn dialog_gcd_cmod_add_materialized_pseudomersenne_with_clean_scratch_at_step(
+    b: &mut B,
+    acc: &[QubitId],
+    a: &[QubitId],
+    ctrl: QubitId,
+    p: U256,
+    clean_scratch: &[QubitId],
+    step: Option<usize>,
 ) {
     assert_eq!(acc.len(), N);
     assert_eq!(a.len(), N);
@@ -819,6 +870,7 @@ pub(crate) fn dialog_gcd_cmod_add_materialized_pseudomersenne_with_clean_scratch
             p,
             blocks,
             clean_scratch,
+            step,
         );
         return;
     }
@@ -854,7 +906,7 @@ pub(crate) fn dialog_gcd_cmod_add_materialized_pseudomersenne_with_clean_scratch
 
     b.set_phase("dialog_gcd_materialized_special_overflow_clean");
     if dialog_gcd_raw_apply_truncated_clean_enabled() {
-        let compare_start = N - dialog_gcd_apply_clean_compare_bits();
+        let compare_start = N - dialog_gcd_special_overflow_clean_compare_bits(step);
         cmp_lt_into_fast(b, &acc[compare_start..], &f[compare_start..], acc_ovf);
     } else {
         cmp_lt_into(b, acc, &f, acc_ovf);
@@ -890,8 +942,9 @@ pub(crate) fn dialog_gcd_clean_truncated_underflow(
     a: &[QubitId],
     ctrl: QubitId,
     acc_ovf: QubitId,
+    step: Option<usize>,
 ) {
-    let compare_start = N - dialog_gcd_apply_clean_compare_bits();
+    let compare_start = N - dialog_gcd_special_underflow_clean_compare_bits(step);
     for &q in &a[compare_start..] {
         b.x(q);
     }
@@ -900,6 +953,47 @@ pub(crate) fn dialog_gcd_clean_truncated_underflow(
     for &q in &a[compare_start..] {
         b.x(q);
     }
+}
+
+pub(crate) fn dialog_gcd_special_underflow_clean_compare_bits(step: Option<usize>) -> usize {
+    dialog_gcd_special_clean_compare_bits_from_env(
+        step,
+        "DIALOG_GCD_SPECIAL_UNDERFLOW_CLEAN_STEP_BITS",
+    )
+}
+
+pub(crate) fn dialog_gcd_special_overflow_clean_compare_bits(step: Option<usize>) -> usize {
+    dialog_gcd_special_clean_compare_bits_from_env(
+        step,
+        "DIALOG_GCD_SPECIAL_OVERFLOW_CLEAN_STEP_BITS",
+    )
+}
+
+pub(crate) fn dialog_gcd_special_clean_compare_bits_from_env(
+    step: Option<usize>,
+    env_name: &str,
+) -> usize {
+    let default_bits = dialog_gcd_apply_clean_compare_bits();
+    let Some(step) = step else {
+        return default_bits;
+    };
+    let Ok(spec) = std::env::var(env_name) else {
+        return default_bits;
+    };
+    for item in spec.split(',') {
+        let Some((raw_step, raw_bits)) = item.trim().split_once(':') else {
+            continue;
+        };
+        if raw_step.trim().parse::<usize>().ok() != Some(step) {
+            continue;
+        }
+        if let Ok(bits) = raw_bits.trim().parse::<usize>() {
+            if (1..=N).contains(&bits) {
+                return bits;
+            }
+        }
+    }
+    default_bits
 }
 
 pub(crate) fn dialog_gcd_load_controlled_slice(
@@ -1246,6 +1340,7 @@ pub(crate) fn dialog_gcd_cmod_add_materialized_pseudomersenne_chunked(
     p: U256,
     blocks: usize,
     clean_scratch: &[QubitId],
+    step: Option<usize>,
 ) {
     assert_eq!(acc.len(), N);
     assert_eq!(a.len(), N);
@@ -1277,7 +1372,7 @@ pub(crate) fn dialog_gcd_cmod_add_materialized_pseudomersenne_chunked(
     }
 
     b.set_phase("dialog_gcd_materialized_special_overflow_clean");
-    let compare_start = N - dialog_gcd_apply_clean_compare_bits();
+    let compare_start = N - dialog_gcd_special_overflow_clean_compare_bits(step);
     ccx_cmp_lt_into_fast(b, &acc[compare_start..], &a[compare_start..], ctrl, acc_ovf);
     unext_reg(b, acc_ovf);
 }
@@ -1290,6 +1385,7 @@ pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_chunked(
     p: U256,
     blocks: usize,
     clean_scratch: &[QubitId],
+    step: Option<usize>,
 ) {
     assert_eq!(acc.len(), N);
     assert_eq!(a.len(), N);
@@ -1321,7 +1417,7 @@ pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_chunked(
     }
 
     b.set_phase("dialog_gcd_materialized_special_underflow_clean");
-    dialog_gcd_clean_truncated_underflow(b, acc, a, ctrl, acc_ovf);
+    dialog_gcd_clean_truncated_underflow(b, acc, a, ctrl, acc_ovf, step);
     unext_reg(b, acc_ovf);
 }
 
@@ -1332,7 +1428,26 @@ pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne(
     ctrl: QubitId,
     p: U256,
 ) {
-    dialog_gcd_cmod_sub_materialized_pseudomersenne_with_clean_scratch(b, acc, a, ctrl, p, &[]);
+    dialog_gcd_cmod_sub_materialized_pseudomersenne_at_step(b, acc, a, ctrl, p, None);
+}
+
+pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_at_step(
+    b: &mut B,
+    acc: &[QubitId],
+    a: &[QubitId],
+    ctrl: QubitId,
+    p: U256,
+    step: Option<usize>,
+) {
+    dialog_gcd_cmod_sub_materialized_pseudomersenne_with_clean_scratch_at_step(
+        b,
+        acc,
+        a,
+        ctrl,
+        p,
+        &[],
+        step,
+    );
 }
 
 pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_with_clean_scratch(
@@ -1342,6 +1457,26 @@ pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_with_clean_scratch
     ctrl: QubitId,
     p: U256,
     clean_scratch: &[QubitId],
+) {
+    dialog_gcd_cmod_sub_materialized_pseudomersenne_with_clean_scratch_at_step(
+        b,
+        acc,
+        a,
+        ctrl,
+        p,
+        clean_scratch,
+        None,
+    );
+}
+
+pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_with_clean_scratch_at_step(
+    b: &mut B,
+    acc: &[QubitId],
+    a: &[QubitId],
+    ctrl: QubitId,
+    p: U256,
+    clean_scratch: &[QubitId],
+    step: Option<usize>,
 ) {
     assert_eq!(acc.len(), N);
     assert_eq!(a.len(), N);
@@ -1357,6 +1492,7 @@ pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_with_clean_scratch
             p,
             blocks,
             clean_scratch,
+            step,
         );
         return;
     }
@@ -1403,7 +1539,7 @@ pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_with_clean_scratch
 
     b.set_phase("dialog_gcd_materialized_special_underflow_clean");
     if dialog_gcd_raw_apply_truncated_clean_enabled() {
-        dialog_gcd_clean_truncated_underflow(b, acc, a, ctrl, acc_ovf);
+        dialog_gcd_clean_truncated_underflow(b, acc, a, ctrl, acc_ovf, step);
     } else {
         b.x(acc_ovf);
         mod_neg_inplace_fast(b, &f, p);
@@ -1441,7 +1577,7 @@ pub(crate) fn emit_dialog_gcd_raw_apply_bitvector(
 
         b.set_phase("dialog_gcd_raw_apply_cadd");
         if dialog_gcd_raw_apply_materialized_special_add_enabled() {
-            dialog_gcd_cmod_add_materialized_pseudomersenne(b, y, x, b0, p);
+            dialog_gcd_cmod_add_materialized_pseudomersenne_at_step(b, y, x, b0, p, Some(step));
         } else if dialog_gcd_raw_apply_direct_special_add_enabled() {
             dialog_gcd_cmod_add_pseudomersenne_lowq(b, y, x, b0, p);
         } else {
@@ -1477,7 +1613,7 @@ pub(crate) fn emit_dialog_gcd_raw_apply_bitvector_reverse_exact(
 
         b.set_phase("dialog_gcd_raw_apply_reverse_csub");
         if dialog_gcd_raw_apply_reverse_materialized_special_sub_enabled() {
-            dialog_gcd_cmod_sub_materialized_pseudomersenne(b, y, x, b0, p);
+            dialog_gcd_cmod_sub_materialized_pseudomersenne_at_step(b, y, x, b0, p, Some(step));
         } else if dialog_gcd_raw_apply_reverse_fast_sub_enabled() {
             cmod_sub_qq(b, y, x, b0, p);
         } else {
@@ -1518,6 +1654,26 @@ pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_borrowed_subtrahen
     p: U256,
     f: &[QubitId],
 ) {
+    dialog_gcd_cmod_sub_materialized_pseudomersenne_borrowed_subtrahend_at_step(
+        b,
+        acc,
+        a,
+        ctrl,
+        p,
+        f,
+        None,
+    );
+}
+
+pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_borrowed_subtrahend_at_step(
+    b: &mut B,
+    acc: &[QubitId],
+    a: &[QubitId],
+    ctrl: QubitId,
+    p: U256,
+    f: &[QubitId],
+    step: Option<usize>,
+) {
     assert_eq!(acc.len(), N);
     assert_eq!(a.len(), N);
     assert_eq!(f.len(), N);
@@ -1546,7 +1702,7 @@ pub(crate) fn dialog_gcd_cmod_sub_materialized_pseudomersenne_borrowed_subtrahen
 
     b.set_phase("dialog_gcd_materialized_special_borrowed_underflow_clean");
     if dialog_gcd_raw_apply_truncated_clean_enabled() {
-        dialog_gcd_clean_truncated_underflow(b, acc, a, ctrl, acc_ovf);
+        dialog_gcd_clean_truncated_underflow(b, acc, a, ctrl, acc_ovf, step);
     } else {
         b.x(acc_ovf);
         mod_neg_inplace_fast(b, f, p);
@@ -1585,7 +1741,15 @@ pub(crate) fn emit_dialog_gcd_raw_apply_bitvector_reverse_borrowed_subtrahend(
 
         b.set_phase("dialog_gcd_raw_apply_reverse_borrowed_csub");
         if dialog_gcd_raw_apply_reverse_materialized_special_sub_enabled() {
-            dialog_gcd_cmod_sub_materialized_pseudomersenne_borrowed_subtrahend(b, y, x, b0, p, f);
+            dialog_gcd_cmod_sub_materialized_pseudomersenne_borrowed_subtrahend_at_step(
+                b,
+                y,
+                x,
+                b0,
+                p,
+                f,
+                Some(step),
+            );
         } else {
             cmod_sub_qq_lowq_borrowed_subtrahend(b, y, x, b0, p, f);
         }

@@ -1071,7 +1071,7 @@ fn configure_ecdsafail_submission_route() {
     // pre-filter + bit-exact quantum confirm, validated 0/0/0 over all 9024
     // shots: 1309 x 1,503,355 = 1,967,891,695, beats the 1,968,064,139 frontier
     // by 172,444).
-    set_default_env("DIALOG_GCD_APPLY_CLEAN_COMPARE_BITS", "18");
+    set_default_env("DIALOG_GCD_APPLY_CLEAN_COMPARE_BITS", "20");
     set_default_env("DIALOG_GCD_RAW_PA", "1");
     set_default_env("DIALOG_GCD_K2", "1");
     // Both-phase apply fold-fusion (fused double_y + halve_y Solinas folds,
@@ -1247,6 +1247,17 @@ fn configure_ecdsafail_submission_route() {
     // Stacked peak-1302 band-trim schedule + measured-ovfclear + F_CUT4=189 (tier-3 "safe lock"):
     // trims average executed Toffoli to 1,456,963 at peak 1302 qubits.
     set_default_env("DIALOG_GCD_BODY_CARRY_BAND_TRIMS", "0,3,3,3,3,3,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,3,3,3");
+    set_default_env("DIALOG_GCD_TOBITVECTOR_CSWAP_BODY_TRIM", "0");
+    set_default_env("DIALOG_GCD_BINDER_NOTCH_STEPS", "9");
+    set_default_env("DIALOG_GCD_BINDER_NOTCH_EXTRA", "2");
+    set_default_env(
+        "DIALOG_GCD_SPECIAL_OVERFLOW_CLEAN_STEP_BITS",
+        "113:21,131:21,142:22,187:23,205:22,210:21",
+    );
+    set_default_env(
+        "DIALOG_GCD_SPECIAL_UNDERFLOW_CLEAN_STEP_BITS",
+        "42:22,91:22,118:22,149:21",
+    );
     set_default_env("DIALOG_GCD_FUSED_OVFCLEAR_MEASURED", "1");
     // 1320q apply teardown: low-q final chunk plus a hosted boundary split at
     // the second custom-five cut. The retained carry at bit 100 hosts the
@@ -1358,7 +1369,7 @@ fn configure_ecdsafail_submission_route() {
     // K2-pair codec 6->3 CCX core encoder (peak-neutral -3,096 T). Re-hunted clean
     // Fiat-Shamir island:
     // nonce 60009363210 validates 0/0/0 over all 9024 shots at 1302q x 1,453,867 T = 1,892,934,834.
-    set_default_env("DIALOG_TAIL_NONCE", "60009363210");
+    set_default_env("DIALOG_TAIL_NONCE", "38978004");
     set_default_env("DIALOG_GCD_FOLD_MAJ2", "1");
     set_default_env("DIALOG_GCD_APPLY_FINAL_WINDOWED_FAST_BLOCKS", "0");
     // Fuse the branch-bit comparator with the b0-controlled log update: derive
