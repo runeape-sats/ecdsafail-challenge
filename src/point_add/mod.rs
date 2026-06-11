@@ -1010,7 +1010,7 @@ fn configure_ecdsafail_submission_route() {
     set_default_env("SQUARE_ROW_WINDOW_CLEAN_COMPARE_BITS", "18");
     set_default_env("ROUND84_KEEP_QUOTIENT_PRODUCT", "1");
     set_default_env("DIALOG_GCD_FOLD_CARRY_TRUNC_W", "19");
-    set_default_env("DIALOG_TAIL_NONCE", "5200018704193");
+    set_default_env("DIALOG_TAIL_NONCE", "310772318");
     set_default_env("DIALOG_GCD_SKIP_ZERO_EDGE_CSHIFT", "1");
     set_default_env("DIALOG_GCD_COMPRESSED_BLOCK_LIFECYCLE", "1");
     set_default_env("DIALOG_GCD_HOST_REVERSE_RAW_BLOCK", "1");
@@ -1346,7 +1346,7 @@ fn configure_ecdsafail_submission_route() {
     // The 21-bit high-carry propagation and rare folded-lo noncanonical band
     // are selected away with the shared Fiat-Shamir island.
     set_default_env("ROUND84_INPLACE_SOLINAS_FOLD", "1");
-    set_default_env("ROUND84_INPLACE_QUOTIENT_CARRY_TRUNC_W", "21");
+    set_default_env("ROUND84_INPLACE_QUOTIENT_CARRY_TRUNC_W", "20");
     // Peak-bounded square (1226 tier): the round84 lam^2 schoolbook square parks
     // a 512-wide product (peak 1024) plus the per-row source register (up to
     // +257 for the widest row → 1284). SQUARE_ROW_MAX_SEG slices each square row
@@ -1457,7 +1457,7 @@ fn configure_ecdsafail_submission_route() {
     // Fiat-Shamir island:
     // Binder-notch fallback 8,9: nonce 169924627 validates 0/0/0 over all
     // 9024 shots at 1300q x 1,454,884 T = 1,891,349,200.
-    set_default_env("DIALOG_TAIL_NONCE", "165002130437");
+    set_default_env("DIALOG_TAIL_NONCE", "310772318");
     set_default_env("ROUND84_FOLD_FAST_ADD", "1");  // round84 Solinas-fold small adders coherent->measured-fast (-1,434 exec-T, peak-neutral 1285)
     set_default_env("DIALOG_GCD_FOLD_MAJ2", "1");
     set_default_env("DIALOG_GCD_FOLD_MAJ1", "1");
